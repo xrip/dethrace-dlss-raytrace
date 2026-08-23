@@ -1069,15 +1069,14 @@ void DoDeltaTrans(tFlic_descriptor* pFlic_info, tU32 chunk_length) {
     tU8 the_byte;
     tU8 the_byte2;
     tU32 the_row_bytes;
-    tU16* line_pixel_ptr;
-    tU16 the_word;
+    tU8* line_pixel_ptr;
 
     line_count = MemReadU16(&pFlic_info->data);
     the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
     pixel_ptr = pFlic_info->first_pixel;
 
     for (i = 0; i < line_count;) {
-        line_pixel_ptr = (tU16*)pixel_ptr;
+        line_pixel_ptr = pixel_ptr;
         number_of_packets = MemReadS16(&pFlic_info->data);
 
         if (number_of_packets < 0) {
@@ -1086,54 +1085,33 @@ void DoDeltaTrans(tFlic_descriptor* pFlic_info, tU32 chunk_length) {
             for (j = 0; j < number_of_packets; j++) {
                 skip_count = MemReadU8(&pFlic_info->data);
                 size_count = MemReadS8(&pFlic_info->data);
-                line_pixel_ptr += skip_count / 2;
+                line_pixel_ptr += skip_count;
                 if (size_count >= 0) {
                     for (k = 0; k < size_count; k++) {
                         the_byte = *pFlic_info->data++;
                         if (the_byte) {
-                            *(tU8*)line_pixel_ptr = the_byte;
-                            line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
-                        } else {
-                            line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
+                            *line_pixel_ptr = the_byte;
                         }
+                        line_pixel_ptr++;
                         the_byte = *pFlic_info->data++;
                         if (the_byte) {
-                            *(tU8*)line_pixel_ptr = the_byte;
-                            line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
-                        } else {
-                            line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
+                            *line_pixel_ptr = the_byte;
                         }
+                        line_pixel_ptr++;
                     }
                 } else {
                     the_byte = *pFlic_info->data++;
                     the_byte2 = *pFlic_info->data++;
 
-                    if (the_byte && the_byte2) {
-                        the_word = *((tU16*)pFlic_info->data - 1);
-                        for (k = 0; k < -size_count; k++) {
-#ifdef DETHRACE_FIX_BUGS
-                            // Avoid unaligned memory access
-                            memcpy(line_pixel_ptr, &the_word, 2);
-#else
-                            *line_pixel_ptr = the_word;
-#endif
-                            line_pixel_ptr++;
+                    for (k = 0; k < -size_count; k++) {
+                        if (the_byte) {
+                            *line_pixel_ptr = the_byte;
                         }
-                    } else {
-                        for (k = 0; k < -size_count; k++) {
-                            if (the_byte) {
-                                *(tU8*)line_pixel_ptr = the_byte;
-                                line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
-                            } else {
-                                line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
-                            }
-                            if (the_byte2) {
-                                *(tU8*)line_pixel_ptr = the_byte2;
-                                line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
-                            } else {
-                                line_pixel_ptr = (tU16*)((tU8*)line_pixel_ptr + 1);
-                            }
+                        line_pixel_ptr++;
+                        if (the_byte2) {
+                            *line_pixel_ptr = the_byte2;
                         }
+                        line_pixel_ptr++;
                     }
                 }
             }
@@ -1155,15 +1133,15 @@ void DoDeltaX(tFlic_descriptor* pFlic_info, tU32 chunk_length) {
     int size_count;
     tU8* pixel_ptr;
     tU32 the_row_bytes;
-    tU16* line_pixel_ptr;
-    tU16 the_word;
+    tU8* line_pixel_ptr;
+    tU8 pixel_pair[2];
 
     line_count = MemReadU16(&pFlic_info->data);
     the_row_bytes = pFlic_info->the_pixelmap->row_bytes;
     pixel_ptr = pFlic_info->first_pixel;
 
     for (i = 0; i < line_count;) {
-        line_pixel_ptr = (tU16*)pixel_ptr;
+        line_pixel_ptr = pixel_ptr;
         number_of_packets = MemReadS16(&pFlic_info->data);
 
         if (number_of_packets < 0) {
@@ -1172,19 +1150,19 @@ void DoDeltaX(tFlic_descriptor* pFlic_info, tU32 chunk_length) {
             for (j = 0; j < number_of_packets; j++) {
                 skip_count = MemReadU8(&pFlic_info->data);
                 size_count = MemReadS8(&pFlic_info->data);
-                line_pixel_ptr += skip_count / 2;
+                line_pixel_ptr += skip_count;
                 if (size_count >= 0) {
                     for (k = 0; k < size_count; k++) {
-                        *line_pixel_ptr = *(tU16*)pFlic_info->data;
+                        memcpy(line_pixel_ptr, pFlic_info->data, sizeof(pixel_pair));
                         pFlic_info->data += 2;
-                        line_pixel_ptr++;
+                        line_pixel_ptr += sizeof(pixel_pair);
                     }
                 } else {
-                    the_word = *(tU16*)pFlic_info->data;
+                    memcpy(pixel_pair, pFlic_info->data, sizeof(pixel_pair));
                     pFlic_info->data += 2;
                     for (k = 0; k < -size_count; k++) {
-                        *line_pixel_ptr = the_word;
-                        line_pixel_ptr++;
+                        memcpy(line_pixel_ptr, pixel_pair, sizeof(pixel_pair));
+                        line_pixel_ptr += sizeof(pixel_pair);
                     }
                 }
             }

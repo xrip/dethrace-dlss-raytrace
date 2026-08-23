@@ -32,7 +32,35 @@ void test_flicplay_playflic() {
     TEST_ASSERT_EQUAL_INT(3, nbr_frames_rendered);
 }
 
+void test_flicplay_deltax_unaligned_destination() {
+    br_pixelmap pixelmap = { 0 };
+    tFlic_descriptor descriptor = { 0 };
+    tU8 destination[8] = { 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa };
+    tU8 encoded[9] = { 0 };
+
+    pixelmap.row_bytes = 4;
+    descriptor.data = (char*)&encoded[1];
+    descriptor.first_pixel = &destination[1];
+    descriptor.the_pixelmap = &pixelmap;
+
+    // One line, one packet, one repeated two-byte pixel pair.
+    encoded[1] = 1;
+    encoded[3] = 1;
+    encoded[5] = 0;
+    encoded[6] = (tU8)-1;
+    encoded[7] = 0x11;
+    encoded[8] = 0x22;
+
+    DoDeltaX(&descriptor, sizeof(encoded));
+
+    TEST_ASSERT_EQUAL_HEX8(0xaa, destination[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x11, destination[1]);
+    TEST_ASSERT_EQUAL_HEX8(0x22, destination[2]);
+    TEST_ASSERT_EQUAL_HEX8(0xaa, destination[3]);
+}
+
 void test_flicplay_suite() {
     UnitySetTestFile(__FILE__);
     RUN_TEST(test_flicplay_playflic);
+    RUN_TEST(test_flicplay_deltax_unaligned_destination);
 }
