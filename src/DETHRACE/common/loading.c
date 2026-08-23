@@ -3498,8 +3498,16 @@ FILE* OldDRfopen(char* pFilename, char* pMode) {
                 ch = fgetc(fp);
 #endif
                 if (ch != gDecode_thing) {
+#ifdef DETHRACE_FIX_BUGS
+                    // dethrace: accept decrypted (plaintext) .TXT data files.
+                    // The original rejects any .TXT not starting with '@'. That check is
+                    // purely a gate: GetALineWithNoPossibleService() decrypts per line and
+                    // passes non-'@' lines through untouched, so plaintext data loads fine.
+                    // See tools/decrypt_game_data.py.
+#else
                     fclose(fp);
                     return NULL;
+#endif
                 }
                 ungetc(ch, fp);
             }
