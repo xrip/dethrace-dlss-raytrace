@@ -145,6 +145,9 @@ br_matrix34 gSmoke_camera_to_world;
 // Bugfix: At higher FPS, `CreatePuffOfSmoke` is called too often and causes smoke cirlces to be recycled too quickly so assume around 25fps
 #define SMOKE_COLUMN_NEW_PUFF_INTERVAL 30
 
+// Keep sparks visible at modern resolutions while preserving their short streak shape.
+#define SPARK_3DFX_THICKNESS 0.01f
+
 #ifdef DETHRACE_FIX_BUGS
 #define TEST_BIT(var, pos) (var & (1u << pos))
 #define SET_BIT(var, pos) (var |= (1u << pos))
@@ -167,6 +170,31 @@ void DrawDot(br_scalar z, tU8* scr_ptr, tU16* depth_ptr, tU8* shade_ptr) {
     }
 }
 
+static void DrawSparkDot(
+    br_scalar z,
+    tU8* scr_ptr,
+    tU16* depth_ptr,
+    tU8* shade_ptr,
+    int x,
+    int y,
+    br_pixelmap* pScreen,
+    br_pixelmap* pDepth_buffer) {
+    int dx;
+    int dy;
+
+    for (dy = 0; dy < 2; dy++) {
+        for (dx = 0; dx < 2; dx++) {
+            if (x + dx < pScreen->width && y + dy < pScreen->height) {
+                DrawDot(
+                    z,
+                    scr_ptr + dx + dy * pScreen->row_bytes,
+                    depth_ptr + dx + dy * (pDepth_buffer->row_bytes / 2),
+                    shade_ptr);
+            }
+        }
+    }
+}
+
 // IDA: void __usercall SetWorldToScreen(br_pixelmap *pScreen@<EAX>)
 // FUNCTION: CARM95 0x00466be2
 void SetWorldToScreen(br_pixelmap* pScreen) {
@@ -186,9 +214,9 @@ void DrawLine3DThroughBRender(br_vector3* pStart, br_vector3* pEnd) {
 
     // HACK: third vertex added by dethrace to work around BR_RSTYLE_EDGES (see `InitLineStuff`)
     gLine_model->vertices[2].p = *pEnd;
-    gLine_model->vertices[2].p.v[0] += 0.001f;
-    gLine_model->vertices[2].p.v[1] += 0.001f;
-    gLine_model->vertices[2].p.v[2] += 0.001f;
+    gLine_model->vertices[2].p.v[0] += SPARK_3DFX_THICKNESS;
+    gLine_model->vertices[2].p.v[1] += SPARK_3DFX_THICKNESS;
+    gLine_model->vertices[2].p.v[2] += SPARK_3DFX_THICKNESS;
     gLine_model->vertices[2].red = gLine_model->vertices[1].red;
     gLine_model->vertices[2].grn = gLine_model->vertices[1].grn;
     gLine_model->vertices[2].blu = gLine_model->vertices[1].blu;
@@ -356,7 +384,7 @@ int DrawLine2D(br_vector3* o, br_vector3* p, br_pixelmap* pScreen, br_pixelmap* 
         darken_count = darken_init;
         zbuff_inc = (p->v[2] - o->v[2]) * 2.0 / (float)ay;
         while (1) {
-            DrawDot(zbuff, scr_ptr, depth_ptr, shade_ptr);
+            DrawSparkDot(zbuff, scr_ptr, depth_ptr, shade_ptr, x, y, pScreen, pDepth_buffer);
             if (y == y2) {
                 break;
             }
@@ -382,7 +410,7 @@ int DrawLine2D(br_vector3* o, br_vector3* p, br_pixelmap* pScreen, br_pixelmap* 
         darken_count = darken_init;
         zbuff_inc = (p->v[2] - o->v[2]) * 2.0 / (float)ax;
         while (1) {
-            DrawDot(zbuff, scr_ptr, depth_ptr, shade_ptr);
+            DrawSparkDot(zbuff, scr_ptr, depth_ptr, shade_ptr, x, y, pScreen, pDepth_buffer);
             if (x == x2) {
                 break;
             }
