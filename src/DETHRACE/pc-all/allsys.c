@@ -32,6 +32,8 @@ int gDOSGfx_initialized;
 int gExtra_mem;
 int gReplay_override;
 
+extern void BrGLRendSetAnisotropyLimit(float limit);
+
 // GLOBAL: CARM95 0x0051D608
 tGraf_spec gGraf_specs[2] = {
     { 8, 1, 0, 320, 200, 0, 0, "32X20X8", "MCGA,W:320,H:200,B:8", 320, 320, 200, NULL },
@@ -405,6 +407,7 @@ void PDAllocateScreenAndBack(void) {
             gl_callbacks.swap_buffers = gHarness_platform.Swap;
             gl_callbacks.get_viewport = gHarness_platform.GetViewport;
             gHarness_platform.CreateWindow_("Carmageddon", gGraf_specs[gGraf_spec_index].phys_width, gGraf_specs[gGraf_spec_index].phys_height, eWindow_type_opengl);
+            BrGLRendSetAnisotropyLimit(harness_game_config.anisotropy_limit);
 
             BrDevBeginVar(&gScreen, "glrend",
                 BRT_WIDTH_I32, gGraf_specs[gGraf_spec_index].phys_width,

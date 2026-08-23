@@ -298,6 +298,8 @@ int Harness_Init(int* argc, char* argv[]) {
     harness_game_config.window_height = 0;
     // keep multisampling disabled unless explicitly requested
     harness_game_config.msaa_samples = 0;
+    // keep the GPU's normal anisotropy limit unless explicitly capped
+    harness_game_config.anisotropy_limit = 0.0f;
     // keep the original camera distance unless explicitly overridden
     harness_game_config.draw_distance = 0.0f;
     // preserve the original car LOD thresholds unless explicitly scaled
@@ -452,6 +454,14 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
                 LOG_INFO2("MSAA samples set to %d", msaa_samples);
             }
             consumed = 1;
+        } else if (strstr(argv[i], "--anisotropy=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            float anisotropy_limit = atof(s + 1);
+            if (anisotropy_limit >= 1.0f) {
+                harness_game_config.anisotropy_limit = anisotropy_limit;
+                LOG_INFO2("Anisotropy limit set to %f", anisotropy_limit);
+            }
+            consumed = 1;
         } else if (strcasecmp(argv[i], "--freeze-timer") == 0) {
             LOG_INFO("Timer frozen");
             harness_game_config.freeze_timer = 1;
@@ -585,6 +595,11 @@ static int Harness_Ini_Callback(void* user, const char* section, const char* nam
         i = atoi(value);
         if (i > 0) {
             harness_game_config.msaa_samples = i;
+        }
+    } else if (MATCH("Graphics", "Anisotropy")) {
+        f = atof(value);
+        if (f >= 1.0f) {
+            harness_game_config.anisotropy_limit = f;
         }
     }
 
