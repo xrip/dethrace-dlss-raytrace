@@ -40,6 +40,10 @@
     X(GL_SetAttribute, int, (SDL_GLattr, int))                                          \
     X(GL_SetSwapInterval, int, (int))                                                   \
     X(GL_SwapWindow, void, (SDL_Window*))                                               \
+    X(Vulkan_GetVkGetInstanceProcAddr, void*, (void))                                    \
+    X(Vulkan_GetInstanceExtensions, SDL_bool, (SDL_Window*, unsigned int*, const char**))\
+    X(Vulkan_CreateSurface, SDL_bool, (SDL_Window*, VkInstance, VkSurfaceKHR*))          \
+    X(Vulkan_GetDrawableSize, void, (SDL_Window*, int*, int*))                           \
     X(GetPrefPath, char*, (const char* org, const char* app))                           \
     X(free, void, (void*))
 

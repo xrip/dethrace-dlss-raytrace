@@ -73,7 +73,10 @@ static int Harness_InitPlatform(void) {
     } else {
         const tPlatform_bootstrap* selected_bootstrap = NULL;
 
-        if (harness_game_config.opengl_3dfx_mode) {
+        if (harness_game_config.vulkan_mode) {
+            required_caps &= ~ePlatform_cap_video_mask;
+            required_caps |= ePlatform_cap_vulkan;
+        } else if (harness_game_config.opengl_3dfx_mode) {
             required_caps &= ~ePlatform_cap_video_mask;
             required_caps |= ePlatform_cap_opengl;
         }
@@ -530,6 +533,10 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
             harness_game_config.sound_options = 1;
             consumed = 1;
         } else if (strcasecmp(argv[i], "--opengl") == 0) {
+            harness_game_config.opengl_3dfx_mode = 1;
+            consumed = 1;
+        } else if (strcasecmp(argv[i], "--vulkan") == 0) {
+            harness_game_config.vulkan_mode = 1;
             harness_game_config.opengl_3dfx_mode = 1;
             consumed = 1;
         } else if (strcasecmp(argv[i], "--software") == 0) {

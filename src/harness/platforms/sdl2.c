@@ -1,4 +1,5 @@
 #include <SDL.h>
+#include <SDL_vulkan.h>
 
 #include "harness.h"
 #include "harness/config.h"
@@ -16,6 +17,7 @@ static br_uint_32 converted_palette[256];
 static br_pixelmap* last_screen_src;
 
 static SDL_GLContext* gl_context;
+static int using_vulkan;
 
 static int render_width, render_height;
 
@@ -272,7 +274,21 @@ static void SDL2_Harness_CreateWindow(const char* title, int width, int height, 
         extra_window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     }
 
-    if (window_type == eWindow_type_opengl) {
+    if (window_type == eWindow_type_vulkan) {
+        // No context to create here: vkrend owns the instance, device and
+        // swapchain. SDL only has to supply a Vulkan-capable window.
+        window = SDL2_CreateWindow(title,
+            SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED,
+            window_width, window_height,
+            extra_window_flags | SDL_WINDOW_VULKAN);
+
+        if (window == NULL) {
+            LOG_PANIC2("Failed to create Vulkan window: %s", SDL2_GetError());
+        }
+        using_vulkan = 1;
+
+    } else if (window_type == eWindow_type_opengl) {
 
         SDL2_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
         SDL2_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -350,7 +366,9 @@ static void SDL2_Harness_Swap(br_pixelmap* back_buffer) {
 
     SDL2_Harness_ProcessWindowMessages();
 
-    if (gl_context != NULL) {
+    if (using_vulkan) {
+        // vkrend already presented via vkQueuePresentKHR.
+    } else if (gl_context != NULL) {
         SDL2_GL_SwapWindow(window);
     } else {
         src_pixels = back_buffer->pixels;
@@ -396,6 +414,39 @@ static void SDL2_Harness_GetViewport(int* x, int* y, float* width_multipler, flo
     *height_multiplier = viewport.scale_y;
 }
 
+// Vulkan glue. Handles are void* across the harness boundary so hooks.h stays
+// free of the Vulkan headers; vkrend casts them back.
+//
+// SDL_Vulkan_GetVkGetInstanceProcAddr is the single point where the Vulkan
+// loader is chosen. Streamline/DLSS is integrated by having this return the
+// interposer's vkGetInstanceProcAddr instead, which is why the driver resolves
+// every entry point through it.
+static void* SDL2_Harness_Vulkan_GetInstanceProcAddr(void) {
+    return SDL2_Vulkan_GetVkGetInstanceProcAddr();
+}
+
+static int SDL2_Harness_Vulkan_GetInstanceExtensions(unsigned int* count, const char** names) {
+    return SDL2_Vulkan_GetInstanceExtensions(window, count, names) == SDL_TRUE;
+}
+
+static int SDL2_Harness_Vulkan_CreateSurface(void* instance, void** surface) {
+    // Not VK_NULL_HANDLE: SDL_vulkan.h declares the handle types but does not
+    // pull in vulkan_core.h, so that macro is not available here.
+    VkSurfaceKHR s = 0;
+
+    if (SDL2_Vulkan_CreateSurface(window, (VkInstance)instance, &s) != SDL_TRUE) {
+        LOG_WARN2("SDL_Vulkan_CreateSurface failed: %s", SDL2_GetError());
+        return 0;
+    }
+
+    *surface = (void*)s;
+    return 1;
+}
+
+static void SDL2_Harness_Vulkan_GetDrawableSize(int* width, int* height) {
+    SDL2_Vulkan_GetDrawableSize(window, width, height);
+}
+
 static int SDL2_Harness_Platform_Init(tHarness_platform* platform) {
     if (SDL2_LoadSymbols() != 0) {
         return 1;
@@ -416,6 +467,10 @@ static int SDL2_Harness_Platform_Init(tHarness_platform* platform) {
     platform->Swap = SDL2_Harness_Swap;
     platform->PaletteChanged = SDL2_Harness_PaletteChanged;
     platform->GL_GetProcAddress = SDL2_GL_GetProcAddress;
+    platform->Vulkan_GetInstanceProcAddr = SDL2_Harness_Vulkan_GetInstanceProcAddr;
+    platform->Vulkan_GetInstanceExtensions = SDL2_Harness_Vulkan_GetInstanceExtensions;
+    platform->Vulkan_CreateSurface = SDL2_Harness_Vulkan_CreateSurface;
+    platform->Vulkan_GetDrawableSize = SDL2_Harness_Vulkan_GetDrawableSize;
     platform->GetViewport = SDL2_Harness_GetViewport;
     return 0;
 };
@@ -423,6 +478,6 @@ static int SDL2_Harness_Platform_Init(tHarness_platform* platform) {
 const tPlatform_bootstrap SDL2_bootstrap = {
     "sdl2",
     "SDL2 video backend (libsdl.org)",
-    ePlatform_cap_software | ePlatform_cap_opengl,
+    ePlatform_cap_software | ePlatform_cap_opengl | ePlatform_cap_vulkan,
     SDL2_Harness_Platform_Init,
 };

@@ -7,6 +7,7 @@
 typedef enum tHarness_window_type {
     eWindow_type_software = 0,
     eWindow_type_opengl = 1,
+    eWindow_type_vulkan = 2,
 } tHarness_window_type;
 
 // Platform implementation functions
@@ -45,6 +46,17 @@ typedef struct tHarness_platform {
     void (*PaletteChanged)(br_colour entries[256]);
     // If this platform supports OpenGL
     void* (*GL_GetProcAddress)(const char* name);
+
+    // Vulkan. Handles are void* so this header stays free of the Vulkan headers.
+    // Returns PFN_vkGetInstanceProcAddr; every other Vulkan entry point the driver
+    // uses is loaded through it, which is also the seam Streamline/DLSS plugs into.
+    void* (*Vulkan_GetInstanceProcAddr)(void);
+    // Instance extensions the window system needs. Call with names==NULL to count.
+    int (*Vulkan_GetInstanceExtensions)(unsigned int* count, const char** names);
+    // Create a VkSurfaceKHR for the window. Non-zero on success.
+    int (*Vulkan_CreateSurface)(void* instance, void** surface);
+    // Drawable size in pixels, which differs from the window size under DPI scaling.
+    void (*Vulkan_GetDrawableSize)(int* width, int* height);
     void (*GetViewport)(int* x, int* y, float* width_multiplier, float* height_multiplier);
 
 } tHarness_platform;
@@ -52,7 +64,8 @@ typedef struct tHarness_platform {
 enum {
     ePlatform_cap_software = 0x1,
     ePlatform_cap_opengl = 0x2,
-    ePlatform_cap_video_mask = ePlatform_cap_software | ePlatform_cap_opengl,
+    ePlatform_cap_vulkan = 0x4,
+    ePlatform_cap_video_mask = ePlatform_cap_software | ePlatform_cap_opengl | ePlatform_cap_vulkan,
 };
 
 typedef struct tPlatform_bootstrap {

@@ -63,6 +63,8 @@ typedef struct tHarness_game_config {
 
     int verbose;
     int opengl_3dfx_mode;
+    // Use the Vulkan renderer (vkrend) instead of OpenGL.
+    int vulkan_mode;
     int game_completed;
 
     // Skip the front-end and drop straight into a race. -1 disables it, otherwise

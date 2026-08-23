@@ -1,4 +1,5 @@
 #include "brender.h"
+#include "brvkrend.h"
 #include "car.h"
 #include "errors.h"
 #include "globvars.h"
@@ -76,6 +77,7 @@ int gForce_voodoo_rush_mode;
 int gForce_voodoo_mode;
 
 br_device_gl_callback_procs gl_callbacks;
+br_device_vk_callback_procs vk_callbacks;
 br_device_virtualfb_callback_procs virtualfb_callbacks;
 
 // from win95sys.c
@@ -401,7 +403,23 @@ void PDAllocateScreenAndBack(void) {
     gScreen = NULL;
 
     // added by dethrace. We default to software mode unless we explicitly ask for 3dfx opengl mode
-    if (harness_game_config.opengl_3dfx_mode) {
+    if (harness_game_config.vulkan_mode) {
+        if (gGraf_spec_index != 0 && !gNo_voodoo) {
+            vk_callbacks.get_instance_proc_addr = (br_device_vk_getinstanceprocaddr_cbfn*)gHarness_platform.Vulkan_GetInstanceProcAddr;
+            vk_callbacks.get_instance_extensions = (br_device_vk_getinstanceextensions_cbfn*)gHarness_platform.Vulkan_GetInstanceExtensions;
+            vk_callbacks.create_surface = (br_device_vk_createsurface_cbfn*)gHarness_platform.Vulkan_CreateSurface;
+            vk_callbacks.get_drawable_size = (br_device_vk_getdrawablesize_cbfn*)gHarness_platform.Vulkan_GetDrawableSize;
+            gHarness_platform.CreateWindow_("Carmageddon", gGraf_specs[gGraf_spec_index].phys_width, gGraf_specs[gGraf_spec_index].phys_height, eWindow_type_vulkan);
+
+            BrDevBeginVar(&gScreen, "vkrend",
+                BRT_WIDTH_I32, gGraf_specs[gGraf_spec_index].phys_width,
+                BRT_HEIGHT_I32, gGraf_specs[gGraf_spec_index].phys_height,
+                BRT_VULKAN_CALLBACKS_P, &vk_callbacks,
+                BRT_PIXEL_TYPE_U8, BR_PMT_RGB_565,
+                BRT_MSAA_SAMPLES_I32, harness_game_config.msaa_samples,
+                BR_NULL_TOKEN);
+        }
+    } else if (harness_game_config.opengl_3dfx_mode) {
         if (gGraf_spec_index != 0 && !gNo_voodoo) {
             gl_callbacks.get_proc_address = gHarness_platform.GL_GetProcAddress;
             gl_callbacks.swap_buffers = gHarness_platform.Swap;
