@@ -4,3 +4,6 @@
 reccmp-user.yml
 reccmp-build.yml
 reccmp-report*
+/cmake-build*
+/staging
+__pycache__/
