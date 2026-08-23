@@ -47,6 +47,13 @@ DefaultGame = c1
 ; Enabling this runs physics every frame, smoothing movement out
 PhysicsPerFrame = 1
 
+[Graphics]
+; Maximum planned view distance
+DrawDistance = 280
+
+; 0 keeps the highest-detail car model at every distance
+CarLodDistanceScale = 0
+
 [Games]
 c1 = /opt/carma/c1
 c1demo = /opt/carma/c1demo
