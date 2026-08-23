@@ -19,6 +19,7 @@
     X(GetPrefPath, char*, (const char *, const char *))                                                 \
     X(GetWindowID, SDL_WindowID, (SDL_Window*))                                                         \
     X(GetWindowSize, bool, (SDL_Window*, int*, int*))                                                   \
+    X(GetWindowSizeInPixels, bool, (SDL_Window*, int*, int*))                                           \
     X(HideCursor, bool, (void))                                                                         \
     X(SetWindowFullscreen, bool, (SDL_Window*, bool))                                                   \
     X(SetWindowSize, bool, (SDL_Window*, int, int))                                                     \

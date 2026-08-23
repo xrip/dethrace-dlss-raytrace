@@ -293,6 +293,9 @@ int Harness_Init(int* argc, char* argv[]) {
     harness_game_config.volume_multiplier = 1.0f;
     // start window in windowed mode
     harness_game_config.start_full_screen = 1;
+    // keep the original platform-selected window size unless overridden
+    harness_game_config.window_width = 0;
+    harness_game_config.window_height = 0;
     // keep the original camera distance unless explicitly overridden
     harness_game_config.draw_distance = 0.0f;
     // preserve the original car LOD thresholds unless explicitly scaled
@@ -423,6 +426,22 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
                 LOG_INFO2("Car LOD distance scale set to %f", car_lod_distance_scale);
             }
             consumed = 1;
+        } else if (strstr(argv[i], "--window-width=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            int window_width = atoi(s + 1);
+            if (window_width >= 320) {
+                harness_game_config.window_width = window_width;
+                LOG_INFO2("Window width set to %d", window_width);
+            }
+            consumed = 1;
+        } else if (strstr(argv[i], "--window-height=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            int window_height = atoi(s + 1);
+            if (window_height >= 200) {
+                harness_game_config.window_height = window_height;
+                LOG_INFO2("Window height set to %d", window_height);
+            }
+            consumed = 1;
         } else if (strcasecmp(argv[i], "--freeze-timer") == 0) {
             LOG_INFO("Timer frozen");
             harness_game_config.freeze_timer = 1;
@@ -541,6 +560,16 @@ static int Harness_Ini_Callback(void* user, const char* section, const char* nam
         f = atof(value);
         if (f > 0.0f) {
             harness_game_config.car_lod_distance_scale = f;
+        }
+    } else if (MATCH("Graphics", "WindowWidth")) {
+        i = atoi(value);
+        if (i >= 320) {
+            harness_game_config.window_width = i;
+        }
+    } else if (MATCH("Graphics", "WindowHeight")) {
+        i = atoi(value);
+        if (i >= 200) {
+            harness_game_config.window_height = i;
         }
     }
 

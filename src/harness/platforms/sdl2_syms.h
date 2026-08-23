@@ -36,6 +36,7 @@
     X(GetScancodeName, const char*, (SDL_Scancode))                                     \
     X(GL_CreateContext, SDL_GLContext, (SDL_Window*))                                   \
     X(GL_GetProcAddress, void*, (const char*))                                          \
+    X(GL_GetDrawableSize, void, (SDL_Window*, int*, int*))                              \
     X(GL_SetAttribute, int, (SDL_GLattr, int))                                          \
     X(GL_SetSwapInterval, int, (int))                                                   \
     X(GL_SwapWindow, void, (SDL_Window*))                                               \

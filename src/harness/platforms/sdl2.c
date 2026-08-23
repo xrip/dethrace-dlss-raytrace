@@ -256,6 +256,12 @@ static void SDL2_Harness_CreateWindow(const char* title, int width, int height, 
         window_width = 640;
         window_height = 480;
     }
+    if (harness_game_config.window_width >= 320) {
+        window_width = harness_game_config.window_width;
+    }
+    if (harness_game_config.window_height >= 200) {
+        window_height = harness_game_config.window_height;
+    }
 
     if (SDL2_Init(SDL_INIT_VIDEO) != 0) {
         LOG_PANIC2("SDL_INIT_VIDEO error: %s", SDL2_GetError());
@@ -373,6 +379,12 @@ static void SDL2_Harness_PaletteChanged(br_colour entries[256]) {
 }
 
 static void SDL2_Harness_GetViewport(int* x, int* y, float* width_multipler, float* height_multiplier) {
+    if (gl_context != NULL && window != NULL && gBack_screen != NULL) {
+        int drawable_width;
+        int drawable_height;
+        SDL2_GL_GetDrawableSize(window, &drawable_width, &drawable_height);
+        calculate_viewport(drawable_width, drawable_height);
+    }
     *x = viewport.x;
     *y = viewport.y;
     *width_multipler = viewport.scale_x;
