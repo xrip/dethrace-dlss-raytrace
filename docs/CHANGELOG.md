@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+### Unreleased — Vulkan Stage 3 parity work
+- Vulkan now renders stored BRender 3D models with textures, depth, fog, ordered blending,
+  environment mapping, mirror/map composition, and live bodywork deformation.
+- The HUD-less scene target remains separate from the CPU 2D upload, preserving the later DLSS
+  Super Resolution and Vulkan frame-generation integration boundary.
+- Stage 4 groundwork is available with `DETHRACE_VULKAN_RENDER_SCALE`: lower-resolution 3D,
+  display-resolution UI composition, sampleable depth, actor-keyed `R16G16_SFLOAT` motion
+  vectors, an 8-sample Halton render jitter, and an internal DLSS layer contract.
+  This is not an SDK or DLSS evaluation path yet.
+- Race 0 is the stable dry capture map. Added repeatable validation and Vulkan/OpenGL
+  presentation-FPS tools; smoke, tyre smoke, skid lines, and sparks remain a deferred effect pass.
+
 ### July 2024
 - Support for CD audio added [PR](https://github.com/dethrace-labs/dethrace/pull/393)
 

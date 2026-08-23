@@ -25,7 +25,7 @@ root.
 |---|---|---|---|
 | OpenGL | `--opengl` | `glrend` | Full 3D. The reference implementation and the A/B baseline. |
 | Software | `--software` | `softrend` + `virtualframebuffer` | Full 3D on CPU. |
-| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 2 complete; Stage 3 stored 3D, textures, depth, and HUD composition work.** |
+| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 3 parity in progress; stored 3D, textures, depth, HUD composition, and live deformation work.** |
 
 Note `opengl_3dfx_mode` defaults to `1` in this tree, so omitting `--opengl` does *not*
 select the software renderer — that is what `--software` is for.
@@ -89,9 +89,54 @@ Evidence:
 * Release build is current. The release build has no registered CTest tests. Full SDK
   1.4.357 runtime captures report zero Vulkan warning/error, fatal, or crash messages.
 
-Current limits: lighting, fog, blend/order-table parity, and immediate-mode geometry are not
-ported. Motion vectors, render/display resolution split, DLSS, and Frame Generation belong
-to later stages.
+### 2026-08-23 continuation — Stage 3 parity work
+
+The current uncommitted BRender work adds these Stage 3 parts:
+
+* Ordered stored geometry now keeps BRender bucket order and the selected stored renderer
+  state through the Vulkan draw. The four BRender blend modes and colour-write state select
+  a small fixed pipeline set backed by the on-disk Vulkan pipeline cache.
+* Prelit vertex colour, finite and infinite environment mapping, material map transforms,
+  and distance fog are active in the Vulkan shaders.
+* The Vulkan offscreen pixelmap now has an addressable RGB565 store for CPU 2D work. A
+  `BrPixelmapFlush` stages that work before later 3D, so a fog background no longer covers
+  the scene at final HUD composition.
+* Scene rendering now uses the active BRender colour output rectangle. Depth-buffer fill
+  requests are carried into the next Vulkan scene, so a sub-pixelmap gets a clean depth
+  area without clearing the main view. This makes the rear-view mirror a real second 3D
+  scene in the correct cockpit rectangle.
+* The HUD-less scene image and depth image remain separate from the final CPU UI upload.
+  This is kept as the resource boundary for later DLSS Super Resolution and Frame
+  Generation tagging.
+
+Evidence:
+
+* `staging/reference/stage3-vulkan-envmap/` — environment mapping and material transform.
+* `staging/reference/stage3-vulkan-order-parity/` — ordered scene geometry.
+* `staging/reference/stage3-vulkan-fog-r7-flush-fix/00-race-start.png` — fog-track scene is
+  visible instead of a full white CPU overlay.
+* `staging/reference/stage3-vulkan-race0-mirror-target/03-cockpit.png` — the rear-view
+  mirror contains the rear 3D scene while the main cockpit view stays intact.
+* `staging/reference/stage3-vulkan-race0-mirror-target/06-map.png` — map mode is complete in
+  the same run.
+* `staging/reference/vulkan-deformation/` — live bodywork deformation and the original repair
+  animation change the stored 3D model through Vulkan.
+* `staging/reference/stage3-vulkan-effects-race0/` — 31-frame Race 0 effect probe completed
+  without renderer errors; smoke, tyre smoke, skid lines, and sparks were not visible in this
+  probe and are deliberately deferred for a later effect pass.
+* `staging/reference/stage3-fps-vulkan/summary.txt` and
+  `staging/reference/stage3-fps-opengl/summary.txt` — uncapped presentation telemetry on the
+  same Race 0 scene: Vulkan 15.100 FPS versus OpenGL 226.443 FPS.
+* `staging/reference/stage3-vulkan-race0-validation/` — 60-second moving Race 0 Vulkan pass,
+  with one selected Race 0 line and zero validation/fatal/assert/access-violation/Vulkan-failure
+  lines.
+* The Release build passes. A 24-second Race 0 Vulkan run stayed live with zero matching
+  validation, fatal, assertion, or crash log lines.
+
+Stage 3 is not complete yet. The 3dfx smoke, tyre-smoke, skid, and spark set is deferred for
+a later focused pass. The remaining Stage 3 gates are a longer full-race completion check,
+direct OpenGL A/B effect proof, and release/tag documentation. DLSS and Frame Generation remain
+later-stage work.
 
 Four commits, oldest first.
 
@@ -272,9 +317,11 @@ src/harness/platforms/sdl2.c   window, surface, instance extensions, drawable si
 
 ### Remaining Stage 3 parity work
 
-Stored triangle models, textures, depth, live deformation, and HUD composition work. The
-remaining gaps are lighting, fog, blend/order-table parity, and immediate-mode geometry.
-`gv1model.c` reports immediate mode as unsupported once instead of silently claiming success.
+Stored triangle models, textures, depth, live deformation, HUD composition, fog, ordered
+blends, environment mapping, the rear-view mirror, map mode, lighting/clip state, mip
+generation, sampler selection, and FPS telemetry work. The remaining gates are a
+validation-clean full-race completion, direct OpenGL A/B effect proof, and release/tag documentation;
+the smoke/skid/spark pass is explicitly deferred by the current user decision.
 
 The Vulkan SDK is installed at `C:/VulkanSDK/1.4.357.0`. Validation was exercised across the
 nine-view texture capture and the deformation run, with no Vulkan warning/error, fatal, or
@@ -289,7 +336,8 @@ crash messages.
   `.\DATA\MINICD`.
 * libsmacker logs `smk_open_filepointer ... returning NULL` at boot on every renderer,
   including `--opengl`. Pre-existing, unrelated.
-* Stage 0 reference set is single-track (race 0 only). `-Race N` is wired but unused.
+* The full reference loop uses race 0. Races 5 and 7 have only focused fog captures; they are
+  not good driving gates because their start area contains water.
 
 ### Technical debt / risks
 
@@ -300,10 +348,11 @@ crash messages.
   the new `46177e4`.
 * Swapchain resize/rebuild works. Texture descriptor sets are lazily recreated when scene
   resources change; individual sets are kept until the descriptor pool is rebuilt.
-* Motion vectors (plan stage 4c) remain the highest-risk item for DLSS. The useful finding:
-  `core/v1db/modrend.c:19` `renderFaces()` already has `br_actor *actor` in scope exactly
-  where geometry is dispatched to the driver — it simply does not forward it. That makes
-  per-instance identity a small, contained core change rather than a scene-graph rewrite.
+* Motion vectors (plan stage 4c) are now generated for stored models. The core V1 walker
+  carries the current actor into the Vulkan driver context; history is keyed by actor,
+  geometry, group, and colour target. First-use, stale entries, 2D paths, and extra same-frame
+  scene passes are handled as zero motion. Halton jitter is applied only to the render projection;
+  Streamline evaluation remains open.
 
 ---
 
@@ -349,6 +398,9 @@ cmake-build-tests/dethrace_test.exe
 powershell -ExecutionPolicy Bypass -File tools/capture_reference.ps1 `
   -Tag opengl -GameArgs '--opengl' -Repo <repo>
 powershell -ExecutionPolicy Bypass -File tools/capture_vulkan_deformation.ps1 -Repo <repo>
+powershell -ExecutionPolicy Bypass -File tools/benchmark_renderers.ps1 -Repo <repo> -Seconds 10
+powershell -ExecutionPolicy Bypass -File tools/validate_race0_vulkan.ps1 -Repo <repo> -Seconds 60
+powershell -ExecutionPolicy Bypass -File tools/validate_race0_vulkan.ps1 -Repo <repo> -Seconds 60 -RenderScale 0.67
 ```
 
 Three things in that harness are load-bearing and documented in `tools/GameInput.ps1`:
@@ -371,6 +423,11 @@ Three things in that harness are load-bearing and documented in `tools/GameInput
 | Release CTest | no tests registered in this build directory |
 | `--vulkan` nine-view runtime | **pass**, distinct textured frames, exit 0, no Vulkan/runtime failures |
 | Vulkan deformation | **pass**, bodywork message + visibly deformed mesh, 34.9% car-area delta, exit 0 |
+| Vulkan Race 0 validation | **pass**, 60 seconds moving, zero validation/fatal/assert/Vulkan-failure lines |
+| Vulkan split-resolution validation | **pass**, render scale 0.67 produced a 429x322 scene for an 800x600 display with zero VUID/renderer-error lines |
+| Vulkan motion-vector pipeline validation | **pass**, actor-keyed `R16G16_SFLOAT` attachment and shader interface ran with zero VUID/renderer-error lines at scales 1.0 and 0.67 |
+| Vulkan jitter validation | **pass**, 8-sample Halton projection jitter with unjittered motion matrices ran at scales 1.0 and 0.67 with zero VUID/renderer-error lines |
+| Presentation FPS | **recorded**, Vulkan 15.100 FPS vs OpenGL 226.443 FPS uncapped on Race 0 |
 | `--opengl` runtime | renders normally, non-blank |
 | `--software` runtime | renders normally, non-blank |
 
@@ -378,19 +435,21 @@ Three things in that harness are load-bearing and documented in `tools/GameInput
 
 ## 7. Current objective and next steps
 
-**Current objective:** Stage 2 upload is complete. Stage 3 now draws textured stored 3D
-models, preserves a separate HUD-less scene target, composes the HUD, and renders normal game
-deformation. Finish **Stage 3 parity** without losing those paths.
+**Current objective:** Stage 3's requested smoke, tyre smoke, skid, and spark visuals remain
+explicitly deferred. Stage 4 now has split render/display targets, sampleable depth, explicit
+DLSS layer ownership, actor-keyed motion vectors, and an 8-sample Halton jitter path. The next
+step is Streamline capability checks; the SDK is not present yet.
 
 Ordered by priority:
 
-1. **Port lighting, fog, blend, and order-table parity.** Keep the current plain/textured
-   pipeline split small; add only the variants the game state actually needs.
-2. **Push the BRender submodule work** to a remote. It exists only
-   on this machine.
-3. **Add immediate-mode geometry or prove every required game path is stored.** It currently
-   reports one unsupported warning and returns failure.
-4. **Finish Stage 3 visual parity.** Compare all nine views against OpenGL and software.
+1. **Keep the deferred effects scoped.** Do not add smoke, sparks, or skid visuals until the
+   requested Stage 4/SDK work is complete.
+2. **Keep immediate-mode behavior honest.** Both GL and Vulkan immediate-mode entry points
+   are still unsupported, but the required Race 0 deformation/effect routes are stored-model
+   paths (`BrModelUpdate`/`BrZbModelRender` in the game code). Do not remove the warning or
+   return success without implementing the full temporary-geometry lifetime.
+3. **Finish Stage 3 visual parity and release.** Compare all nine views against OpenGL and
+   software, run the full-race check, then tag and document the release.
    * Watch the clip-space difference: GL is z ∈ [-1,1] y-up, Vulkan z ∈ [0,1] y-down. Fix it
      in **one** place (the projection conversion), not in the shaders. Verify with an
      asymmetric scene — a symmetric one hides mirroring bugs.
@@ -399,10 +458,12 @@ Ordered by priority:
      for OpenGL, and it applies to Vulkan via `opengl_3dfx_mode`. Matching `glrend` alone is
      not sufficient — check against the software reference too.
    * **Stage 3 is a shippable release** in its own right. Tag it.
-5. **Stages 4–6 — DLSS.** Re-scope only once stage 3 parity is complete. Stage 4 (split render/display
-   resolution, depth as sampled image, motion vectors, jitter) is the hard part; stages 5–6
-   are the SDK integration. Current Streamline documentation keeps Dynamic Multi Frame
-   Generation on D3D12; do not promise that mode on Vulkan.
+4. **Stage 4 — DLSS prerequisites.** `DETHRACE_VULKAN_RENDER_SCALE` now exercises split scene
+   and display targets, depth and motion are sampleable, and the four image layers are exposed.
+   Halton jitter now affects only the render projection; next: Streamline capability checks.
+5. **Stages 5–6 — DLSS SDK integration.** Keep a clean fallback when Streamline/DLSS is absent;
+   current Streamline documentation keeps Dynamic Multi Frame Generation on D3D12, so do not
+   promise that mode on Vulkan.
 
 ---
 

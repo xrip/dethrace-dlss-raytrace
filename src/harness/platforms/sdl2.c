@@ -1,5 +1,7 @@
 #include <SDL.h>
 #include <SDL_vulkan.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "harness.h"
 #include "harness/config.h"
@@ -79,6 +81,46 @@ static void* sdl2_so;
 #define FOREACH_SDLX_SYM FOREACH_SDL2_SYM
 
 #include "sdl_dyn_common.h"
+
+/* Optional presentation telemetry for renderer A/B and future frame generation. */
+static FILE* frame_stats_file;
+static Uint32 frame_stats_last_report;
+static unsigned int frame_stats_frames;
+static int frame_stats_initialized;
+
+static void record_frame_stats(void) {
+    const char* path;
+    Uint32 now;
+    Uint32 elapsed;
+    const char* renderer_name;
+
+    if (!frame_stats_initialized) {
+        frame_stats_initialized = 1;
+        path = getenv("DETHRACE_FRAME_STATS");
+        if (path != NULL && path[0] != '\0') {
+            frame_stats_file = fopen(path, "w");
+            if (frame_stats_file == NULL)
+                fprintf(stderr, "FRAME_STATS: cannot open %s\n", path);
+        }
+        frame_stats_last_report = SDL2_GetTicks();
+    }
+    if (frame_stats_file == NULL)
+        return;
+
+    frame_stats_frames++;
+    now = SDL2_GetTicks();
+    elapsed = now - frame_stats_last_report;
+    if (elapsed < 1000)
+        return;
+
+    renderer_name = using_vulkan ? "vulkan" : (gl_context != NULL ? "opengl" : "software");
+    fprintf(frame_stats_file, "FRAME_STATS renderer=%s elapsed_ms=%u frames=%u fps=%.3f\n",
+        renderer_name, elapsed, frame_stats_frames,
+        (double)frame_stats_frames * 1000.0 / (double)elapsed);
+    fflush(frame_stats_file);
+    frame_stats_frames = 0;
+    frame_stats_last_report = now;
+}
 
 static void calculate_viewport(int window_width, int window_height) {
     int vp_width, vp_height;
@@ -385,6 +427,8 @@ static void SDL2_Harness_Swap(br_pixelmap* back_buffer) {
         SDL2_RenderPresent(renderer);
         last_screen_src = back_buffer;
     }
+
+    record_frame_stats();
 
     if (harness_game_config.fps != 0) {
         limit_fps();

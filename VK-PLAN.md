@@ -316,7 +316,7 @@ present to display resolution. Touches `PDAllocateScreenAndBack`
 **4b. Depth as a sampled image.** Change the depth attachment usage to include
 `VK_IMAGE_USAGE_SAMPLED_BIT`. Trivial, but it must happen before anything can read it.
 
-**4c. Motion vectors — the real work.**
+**4c. Motion vectors — the real work (wire path implemented).**
 
 Add a second colour attachment (`R16G16_SFLOAT`) written by the main fragment shader as
 `currentClipPos.xy/w - previousClipPos.xy/w`, so it needs the previous frame's MVP per draw.
@@ -339,10 +339,17 @@ Handle these cases explicitly:
 * Rear-view mirror → a second camera; needs its own MVP history keyed by target pixelmap,
   or DLSS should simply be disabled for the mirror pass.
 
-**4d. Jitter.** Apply a Halton(2,3) sub-pixel offset to the projection matrix. Inject it in
+The current Vulkan path now carries the V1 actor into the driver, keys history by actor,
+geometry, group, and target, and writes an `R16G16_SFLOAT` attachment. First-use, stale,
+2D, and extra same-frame passes produce zero motion. The shader and image-layout path is
+validation-clean at full and split render scales. A visual motion debug view is still open.
+
+**4d. Jitter (implemented).** Apply a Halton(2,3) sub-pixel offset to the projection matrix. Inject it in
 exactly one place — where the GL/Vulkan projection is derived in the state cache — so the
 un-jittered matrix stays available to hand to Streamline (`sl::Constants` matrices must be
-jitter-free, `ProgrammingGuideDLSS.md:206`).
+jitter-free, `ProgrammingGuideDLSS.md:206`). The Vulkan path uses an 8-sample sequence;
+rendering uses the jittered projection while motion and future Streamline matrices use the
+unjittered projection.
 
 **4e. Expose the layers.** Formalise what already exists: HUD-less colour = the 3D target
 after the scene and before the overlay composite; UI colour+alpha = `asBack.overlayTexture`
