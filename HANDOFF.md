@@ -16,8 +16,8 @@ BRender 1.3.2, vendored as a submodule at `lib/BRender-v1.3.2` (fork:
 Super Resolution and Frame Generation.
 
 The route is a new BRender driver, `vkrend`, sitting alongside the existing `glrend`, reached
-via a `--vulkan` flag. The full plan (7 stages, acceptance criteria per stage) lives at
-`C:\Users\xr1p\.claude\plans\robust-puzzling-kahn.md`.
+via a `--vulkan` flag. The full plan (7 stages, acceptance criteria per stage) is in `VK-PLAN.md` at the repo
+root.
 
 ### Renderers that exist
 
@@ -381,7 +381,7 @@ Ordered by priority:
 
 | Path | Why |
 |---|---|
-| `C:\Users\xr1p\.claude\plans\robust-puzzling-kahn.md` | Full 7-stage plan with per-stage acceptance criteria and risk table |
+| `VK-PLAN.md` | Full 7-stage plan with per-stage acceptance criteria and risk table |
 | `lib/BRender-v1.3.2/drivers/vkrend/vksetup.c` | All Vulkan bring-up; read `vkrend_load()` first |
 | `lib/BRender-v1.3.2/drivers/vkrend/devpixmp.c` | Screen pixelmap and the present loop — where stage 2 starts |
 | `lib/BRender-v1.3.2/drivers/vkrend/device.c` | Token matching, incl. the `insignificantMatchTokens` trap |
