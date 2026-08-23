@@ -307,7 +307,7 @@ int Harness_Init(int* argc, char* argv[]) {
     // keep the GPU's normal anisotropy limit unless explicitly capped
     harness_game_config.anisotropy_limit = 0.0f;
     // use the highest planned view-distance preset unless explicitly overridden
-    harness_game_config.draw_distance = 280.0f;
+    harness_game_config.draw_distance = 700.0f;
     // keep the highest-detail car model at every distance unless explicitly scaled
     harness_game_config.car_lod_distance_scale = 0.0f;
     // Disable gore check emulation
