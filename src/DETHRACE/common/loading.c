@@ -3810,6 +3810,9 @@ int RestoreOptions(void) {
     f = DRfopen(the_path, "rt");
     if (f == NULL) {
         LOG_WARN("Failed to open OPTIONS.TXT");
+        if (harness_game_config.draw_distance >= 5.0f) {
+            SetYon(harness_game_config.draw_distance);
+        }
         return 0;
     }
     while (fgets(line, COUNT_OF(line), f)) {
@@ -3891,6 +3894,9 @@ int RestoreOptions(void) {
         }
     }
     fclose(f);
+    if (harness_game_config.draw_distance >= 5.0f) {
+        SetYon(harness_game_config.draw_distance);
+    }
     return 1;
 }
 

@@ -293,6 +293,8 @@ int Harness_Init(int* argc, char* argv[]) {
     harness_game_config.volume_multiplier = 1.0f;
     // start window in windowed mode
     harness_game_config.start_full_screen = 1;
+    // keep the original camera distance unless explicitly overridden
+    harness_game_config.draw_distance = 0.0f;
     // Disable gore check emulation
     harness_game_config.gore_check = 0;
     // Disable "Sound Options" menu
@@ -403,6 +405,14 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
             harness_game_config.fps = atoi(s + 1);
             LOG_INFO2("FPS limiter set to %f", harness_game_config.fps);
             consumed = 1;
+        } else if (strstr(argv[i], "--draw-distance=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            float draw_distance = atof(s + 1);
+            if (draw_distance >= 5.0f) {
+                harness_game_config.draw_distance = draw_distance;
+                LOG_INFO2("Draw distance set to %f", draw_distance);
+            }
+            consumed = 1;
         } else if (strcasecmp(argv[i], "--freeze-timer") == 0) {
             LOG_INFO("Timer frozen");
             harness_game_config.freeze_timer = 1;
@@ -510,6 +520,13 @@ static int Harness_Ini_Callback(void* user, const char* section, const char* nam
         gGraf_spec_index = (value[0] == '1');
     } else if (MATCH("General", "PhysicsPerFrame")) {
         harness_game_config.physics_per_frame = (value[0] == '1');
+    }
+
+    else if (MATCH("Graphics", "DrawDistance")) {
+        f = atof(value);
+        if (f >= 5.0f) {
+            harness_game_config.draw_distance = f;
+        }
     }
 
     else if (MATCH("Cheats", "EditMode")) {
