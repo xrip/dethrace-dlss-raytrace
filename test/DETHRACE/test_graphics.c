@@ -17,6 +17,7 @@ void test_graphics_defaults() {
     TEST_ASSERT_EQUAL_INT(0, harness_game_config.window_width);
     TEST_ASSERT_EQUAL_INT(0, harness_game_config.window_height);
     TEST_ASSERT_EQUAL_INT(0, harness_game_config.msaa_samples);
+    TEST_ASSERT_EQUAL_INT(1, harness_game_config.vsync);
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, harness_game_config.anisotropy_limit);
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, harness_game_config.draw_distance);
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.0f, harness_game_config.car_lod_distance_scale);

@@ -54,6 +54,7 @@ typedef struct tHarness_game_config {
     int window_width;
     int window_height;
     int msaa_samples;
+    int vsync;
     float anisotropy_limit;
     float draw_distance;
     float car_lod_distance_scale;

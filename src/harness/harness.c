@@ -298,6 +298,8 @@ int Harness_Init(int* argc, char* argv[]) {
     harness_game_config.window_height = 0;
     // keep multisampling disabled unless explicitly requested
     harness_game_config.msaa_samples = 0;
+    // preserve the existing synchronized presentation default
+    harness_game_config.vsync = 1;
     // keep the GPU's normal anisotropy limit unless explicitly capped
     harness_game_config.anisotropy_limit = 0.0f;
     // keep the original camera distance unless explicitly overridden
@@ -462,6 +464,10 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
                 LOG_INFO2("Anisotropy limit set to %f", anisotropy_limit);
             }
             consumed = 1;
+        } else if (strstr(argv[i], "--vsync=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            harness_game_config.vsync = atoi(s + 1) != 0;
+            consumed = 1;
         } else if (strcasecmp(argv[i], "--freeze-timer") == 0) {
             LOG_INFO("Timer frozen");
             harness_game_config.freeze_timer = 1;
@@ -601,6 +607,8 @@ static int Harness_Ini_Callback(void* user, const char* section, const char* nam
         if (f >= 1.0f) {
             harness_game_config.anisotropy_limit = f;
         }
+    } else if (MATCH("Graphics", "VSync")) {
+        harness_game_config.vsync = value[0] == '1';
     }
 
     else if (MATCH("Cheats", "EditMode")) {
