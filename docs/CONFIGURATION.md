@@ -25,8 +25,8 @@ FPSLimit = 60
 ; Full screen or window
 Windowed = 1
 
-; 3dfx mode (via OpenGL)
-Emulate3DFX = 0
+; 3dfx mode (via OpenGL). Old data without 3dfx assets falls back to software.
+Emulate3DFX = 1
 
 ; Censored zombie/robots mode
 BoringMode = 0
@@ -34,7 +34,7 @@ BoringMode = 0
 ; Play cut scenes on startup and between races
 Cutscenes = 0
 
-; "hires" mode is 640x480, otherwise default 320x200
+; "hires" mode selects the 640x480 game assets, otherwise 320x200 assets are used
 Hires = 1
 
 ; Only used in 'demo' mode. Default demo time out is 240s (4 mins)
@@ -48,6 +48,10 @@ DefaultGame = c1
 PhysicsPerFrame = 1
 
 [Graphics]
+; HD-sized OpenGL drawable. The game keeps its 4:3 640x480 logical surface.
+WindowWidth = 1920
+WindowHeight = 1080
+
 ; Maximum planned view distance
 DrawDistance = 280
 

@@ -6,6 +6,7 @@
 #include "harness/config.h"
 
 extern tGraf_spec gGraf_specs[2];
+extern int gGraf_spec_index;
 
 void test_graphics_defaults() {
     TEST_ASSERT_EQUAL_INT(320, gGraf_specs[0].total_width);
@@ -14,8 +15,10 @@ void test_graphics_defaults() {
     TEST_ASSERT_EQUAL_INT(480, gGraf_specs[1].total_height);
 
     TEST_ASSERT_EQUAL_INT(0, gCar_simplification_level);
-    TEST_ASSERT_EQUAL_INT(0, harness_game_config.window_width);
-    TEST_ASSERT_EQUAL_INT(0, harness_game_config.window_height);
+    TEST_ASSERT_EQUAL_INT(1, gGraf_spec_index);
+    TEST_ASSERT_EQUAL_INT(harness_game_info.data_dir_has_3dfx_assets, harness_game_config.opengl_3dfx_mode);
+    TEST_ASSERT_EQUAL_INT(1920, harness_game_config.window_width);
+    TEST_ASSERT_EQUAL_INT(1080, harness_game_config.window_height);
     TEST_ASSERT_EQUAL_INT(0, harness_game_config.msaa_samples);
     TEST_ASSERT_EQUAL_INT(1, harness_game_config.vsync);
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, harness_game_config.anisotropy_limit);

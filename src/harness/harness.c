@@ -291,11 +291,15 @@ int Harness_Init(int* argc, char* argv[]) {
     harness_game_config.enable_diagnostics = 0;
     // no volume multiplier
     harness_game_config.volume_multiplier = 1.0f;
-    // start window in windowed mode
+    // start in fullscreen mode
     harness_game_config.start_full_screen = 1;
-    // keep the original platform-selected window size unless overridden
-    harness_game_config.window_width = 0;
-    harness_game_config.window_height = 0;
+    // render the high-resolution 3D view in a modern HD-sized drawable by default
+    harness_game_config.window_width = 1920;
+    harness_game_config.window_height = 1080;
+    // use the OpenGL path so the 3D scene is rasterized at the drawable size
+    harness_game_config.opengl_3dfx_mode = 1;
+    // load the 640x480 resolution-dependent assets by default
+    gGraf_spec_index = 1;
     // keep multisampling disabled unless explicitly requested
     harness_game_config.msaa_samples = 0;
     // preserve the existing synchronized presentation default
@@ -343,8 +347,8 @@ int Harness_Init(int* argc, char* argv[]) {
     }
 
     if (harness_game_config.opengl_3dfx_mode && !harness_game_info.data_dir_has_3dfx_assets) {
-        printf("Error: data directory does not contain 3dfx assets so opengl mode cannot be used\n");
-        exit(1);
+        LOG_WARN("Data directory has no 3dfx assets; falling back to software rendering");
+        harness_game_config.opengl_3dfx_mode = 0;
     }
 
     return 0;
