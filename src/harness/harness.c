@@ -295,6 +295,8 @@ int Harness_Init(int* argc, char* argv[]) {
     harness_game_config.start_full_screen = 1;
     // keep the original camera distance unless explicitly overridden
     harness_game_config.draw_distance = 0.0f;
+    // preserve the original car LOD thresholds unless explicitly scaled
+    harness_game_config.car_lod_distance_scale = 1.0f;
     // Disable gore check emulation
     harness_game_config.gore_check = 0;
     // Disable "Sound Options" menu
@@ -413,6 +415,14 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
                 LOG_INFO2("Draw distance set to %f", draw_distance);
             }
             consumed = 1;
+        } else if (strstr(argv[i], "--car-lod-scale=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            float car_lod_distance_scale = atof(s + 1);
+            if (car_lod_distance_scale > 0.0f) {
+                harness_game_config.car_lod_distance_scale = car_lod_distance_scale;
+                LOG_INFO2("Car LOD distance scale set to %f", car_lod_distance_scale);
+            }
+            consumed = 1;
         } else if (strcasecmp(argv[i], "--freeze-timer") == 0) {
             LOG_INFO("Timer frozen");
             harness_game_config.freeze_timer = 1;
@@ -526,6 +536,11 @@ static int Harness_Ini_Callback(void* user, const char* section, const char* nam
         f = atof(value);
         if (f >= 5.0f) {
             harness_game_config.draw_distance = f;
+        }
+    } else if (MATCH("Graphics", "CarLodDistanceScale")) {
+        f = atof(value);
+        if (f > 0.0f) {
+            harness_game_config.car_lod_distance_scale = f;
         }
     }
 

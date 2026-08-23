@@ -4695,6 +4695,9 @@ void MungeCarGraphics(tU32 pFrame_period) {
 
         if (the_car->driver != eDriver_local_human && the_car->car_model_variable) {
             distance_from_camera = Vector3DistanceSquared(&the_car->car_master_actor->t.t.translate.t, (br_vector3*)gCamera_to_world.m[3]);
+            if (harness_game_config.car_lod_distance_scale != 1.0f) {
+                distance_from_camera *= harness_game_config.car_lod_distance_scale;
+            }
             distance_from_camera /= gCar_simplification_factor[gGraf_spec_index][gCar_simplification_level * 1];
 #ifdef DETHRACE_FIX_BUGS
 // This avoids out-of-bounds access when having lots of cars

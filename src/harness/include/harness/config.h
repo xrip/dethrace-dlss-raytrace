@@ -52,6 +52,7 @@ typedef struct tHarness_game_config {
     float volume_multiplier;
     int start_full_screen;
     float draw_distance;
+    float car_lod_distance_scale;
     int gore_check;
     int sound_options;
 
