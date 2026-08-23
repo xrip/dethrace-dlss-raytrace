@@ -397,7 +397,7 @@ void PDAllocateScreenAndBack(void) {
         gExceptions_general_file = "VOODOO";
         gExceptions_file_suffix = ".TXT";
         gSmall_frames_are_slow = 1;
-        gNo_2d_effects = 1;
+        gNo_2d_effects = 1; // sparks and smoke use BRender overlays
         gPerspective_is_fast = 1;
         gNo_transients = 1;
         gDevious_2d = 1;
@@ -406,6 +406,7 @@ void PDAllocateScreenAndBack(void) {
         gExceptions_file_suffix = ".TXT";
         gInterpolate_textures = 1;
         gExceptions_general_file = "SOFTWARE";
+        gNo_2d_effects = 0; // sparks and smoke write directly to the software framebuffer
 
         gScreen = BrDevBeginOld(gGraf_specs[gGraf_spec_index].gfx_init_string);
         gDOSGfx_initialized = 1;
