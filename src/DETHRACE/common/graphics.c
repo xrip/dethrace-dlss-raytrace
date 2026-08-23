@@ -13,6 +13,7 @@
 #include "globvrbm.h"
 #include "globvrpb.h"
 #include "grafdata.h"
+#include "harness/config.h"
 #include "harness/hooks.h"
 #include "harness/os.h"
 #include "harness/trace.h"
@@ -2019,7 +2020,7 @@ void RenderAFrame(int pDepth_mask_on) {
         && !gProgram_state.cockpit_on
         && !(gAction_replay_camera_mode && gAction_replay_mode)) {
 #ifdef DETHRACE_3DFX_PATCH
-        if (!gBlitting_is_slow)
+        if (!gBlitting_is_slow && !harness_game_config.opengl_3dfx_mode)
 #endif
         {
             ExternalSky(gRender_screen, gDepth_buffer, gCamera, &gCamera_to_world);
