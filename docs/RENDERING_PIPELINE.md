@@ -57,3 +57,5 @@ Render the framebuffer from above as a full-screen quad.
 ### Swap buffers hook
 - Again capture `gBack_screen` to pick up HUD elements rendered after the 3d scene, convert it to 32 bit, and render it as a full-screen quad.
 - Generate a palette-manipulation image which is blended over the top of everything as a full-screen quad to handle palette animations.
+
+Transparent sprite maps keep the base texture level in the OpenGL path. This keeps pedestrians and effects at their highest available detail at any distance, while opaque world textures still use mipmaps and anisotropic filtering.

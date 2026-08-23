@@ -2,6 +2,8 @@
 
 #include "common/car.h"
 #include "common/graphics.h"
+#include "common/globvrbm.h"
+#include "common/utility.h"
 #include "dr_types.h"
 #include "harness/config.h"
 
@@ -38,8 +40,49 @@ void test_graphics_loadfont() {
     TEST_ASSERT_NOT_NULL(gFonts[kFont_TYPEABLE].images);
 }
 
+void test_graphics_transparent_materials_keep_base_texture() {
+    br_pixelmap* map;
+    br_material* material;
+    int old_opengl_mode;
+    int old_mip_maps;
+    int old_interpolate_textures;
+
+    map = BrPixelmapAllocate(BR_PMT_INDEX_8, 2, 2, NULL, 0);
+    material = BrMaterialAllocate(NULL);
+    TEST_ASSERT_NOT_NULL(map);
+    TEST_ASSERT_NOT_NULL(material);
+    ((tU8*)map->pixels)[0] = 0;
+    material->flags |= BR_MATF_MAP_ANTIALIASING;
+    material->colour_map = map;
+
+    old_opengl_mode = harness_game_config.opengl_3dfx_mode;
+    old_mip_maps = gUse_mip_maps;
+    old_interpolate_textures = gInterpolate_textures;
+    harness_game_config.opengl_3dfx_mode = 1;
+    gUse_mip_maps = 1;
+    gInterpolate_textures = 1;
+    GlorifyMaterial(&material, 1);
+
+    TEST_ASSERT_EQUAL_INT(0, material->flags & BR_MATF_MAP_ANTIALIASING);
+
+    ((tU8*)map->pixels)[0] = 1;
+    ((tU8*)map->pixels)[1] = 1;
+    ((tU8*)map->pixels)[map->row_bytes] = 1;
+    ((tU8*)map->pixels)[map->row_bytes + 1] = 1;
+    material->flags = 0;
+    GlorifyMaterial(&material, 1);
+    TEST_ASSERT_NOT_EQUAL(0, material->flags & BR_MATF_MAP_ANTIALIASING);
+
+    harness_game_config.opengl_3dfx_mode = old_opengl_mode;
+    gUse_mip_maps = old_mip_maps;
+    gInterpolate_textures = old_interpolate_textures;
+    BrMaterialFree(material);
+    BrPixelmapFree(map);
+}
+
 void test_graphics_suite() {
     UnitySetTestFile(__FILE__);
     RUN_TEST(test_graphics_defaults);
     RUN_TEST(test_graphics_loadfont);
+    RUN_TEST(test_graphics_transparent_materials_keep_base_texture);
 }

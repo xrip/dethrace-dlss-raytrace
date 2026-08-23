@@ -1699,6 +1699,7 @@ int DRStricmp(char* p1, char* p2) {
 void GlorifyMaterial(br_material** pArray, int pCount) {
     int i;
     int c;
+    int has_transparent_pixels;
     br_pixelmap* big_tile;
     tException_list e;
 
@@ -1714,15 +1715,20 @@ void GlorifyMaterial(br_material** pArray, int pCount) {
     for (i = 0; i < pCount; i++) {
         if (pArray[i]->colour_map != NULL) {
             e = FindExceptionInList(pArray[i]->colour_map->identifier, gExceptions);
+            has_transparent_pixels = (pArray[i]->colour_map->flags & BR_PMF_KEYED_TRANSPARENCY) != 0
+                || DRPixelmapHasZeros(pArray[i]->colour_map);
 
             if (gInterpolate_textures) {
                 // use linear texture filtering unless we have a "nobilinear" flag or the texture has transparent parts
-                if ((e == NULL || (e->flags & ExceptionFlag_NoBilinear) == 0) && !DRPixelmapHasZeros(pArray[i]->colour_map)) {
+                if ((e == NULL || (e->flags & ExceptionFlag_NoBilinear) == 0) && !has_transparent_pixels) {
                     pArray[i]->flags |= BR_MATF_MAP_INTERPOLATION;
                 }
             }
-            if (gUse_mip_maps) {
+            // Transparent billboard maps keep their full base texture at every distance.
+            if (gUse_mip_maps && !has_transparent_pixels) {
                 pArray[i]->flags |= BR_MATF_MAP_ANTIALIASING;
+            } else if (has_transparent_pixels) {
+                pArray[i]->flags &= ~BR_MATF_MAP_ANTIALIASING;
             }
             if (gPerspective_is_fast) {
                 pArray[i]->flags |= BR_MATF_PERSPECTIVE;
