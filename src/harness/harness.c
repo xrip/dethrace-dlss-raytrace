@@ -296,6 +296,8 @@ int Harness_Init(int* argc, char* argv[]) {
     // keep the original platform-selected window size unless overridden
     harness_game_config.window_width = 0;
     harness_game_config.window_height = 0;
+    // keep multisampling disabled unless explicitly requested
+    harness_game_config.msaa_samples = 0;
     // keep the original camera distance unless explicitly overridden
     harness_game_config.draw_distance = 0.0f;
     // preserve the original car LOD thresholds unless explicitly scaled
@@ -442,6 +444,14 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
                 LOG_INFO2("Window height set to %d", window_height);
             }
             consumed = 1;
+        } else if (strstr(argv[i], "--msaa=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            int msaa_samples = atoi(s + 1);
+            if (msaa_samples > 0) {
+                harness_game_config.msaa_samples = msaa_samples;
+                LOG_INFO2("MSAA samples set to %d", msaa_samples);
+            }
+            consumed = 1;
         } else if (strcasecmp(argv[i], "--freeze-timer") == 0) {
             LOG_INFO("Timer frozen");
             harness_game_config.freeze_timer = 1;
@@ -570,6 +580,11 @@ static int Harness_Ini_Callback(void* user, const char* section, const char* nam
         i = atoi(value);
         if (i >= 200) {
             harness_game_config.window_height = i;
+        }
+    } else if (MATCH("Graphics", "MSAASamples")) {
+        i = atoi(value);
+        if (i > 0) {
+            harness_game_config.msaa_samples = i;
         }
     }
 

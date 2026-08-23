@@ -274,6 +274,14 @@ static void SDL2_Harness_CreateWindow(const char* title, int width, int height, 
 
     if (window_type == eWindow_type_opengl) {
 
+        SDL2_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL2_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL2_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+        if (harness_game_config.msaa_samples > 0) {
+            SDL2_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+            SDL2_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, harness_game_config.msaa_samples);
+        }
+
         window = SDL2_CreateWindow(title,
             SDL_WINDOWPOS_CENTERED,
             SDL_WINDOWPOS_CENTERED,
@@ -284,9 +292,6 @@ static void SDL2_Harness_CreateWindow(const char* title, int width, int height, 
             LOG_PANIC2("Failed to create window: %s", SDL2_GetError());
         }
 
-        SDL2_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        SDL2_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL2_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
         gl_context = SDL2_GL_CreateContext(window);
 
         if (gl_context == NULL) {
