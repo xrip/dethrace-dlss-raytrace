@@ -1908,3 +1908,33 @@ int DoMultiPlayerStart(void) {
         return 0;
     }
 }
+
+// dethrace addition: start a race directly, skipping the whole front-end.
+// Mirrors the tail of DoNewGame() (driver select -> skill select -> load car ->
+// InitGame), but with every interactive screen removed. Driven by
+// harness_game_config.quick_race so renderer benchmarks and reference captures
+// are reproducible instead of depending on scripted menu input.
+void QuickRaceStart(int pRace_index, int pSkill_level) {
+    gProgram_state.frank_or_anniness = eFrankie;
+    gProgram_state.skill_level = pSkill_level;
+
+    if (gProgram_state.player_name[gProgram_state.frank_or_anniness][0] == '\0') {
+        strcpy(gProgram_state.player_name[gProgram_state.frank_or_anniness], "PLAYER");
+    }
+
+    StartLoadingScreen();
+    AboutToLoadFirstCar();
+    SwitchToRealResolution();
+    LoadCar(
+        gBasic_car_names[gProgram_state.frank_or_anniness],
+        eDriver_local_human,
+        &gProgram_state.current_car,
+        gProgram_state.frank_or_anniness,
+        gProgram_state.player_name[gProgram_state.frank_or_anniness],
+        &gOur_car_storage_space);
+    SwitchToLoresMode();
+    SetCarStorageTexturingLevel(&gOur_car_storage_space, GetCarTexturingLevel(), eCTL_full);
+
+    gNet_mode = eNet_mode_none;
+    InitGame(pRace_index);
+}

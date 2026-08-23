@@ -12,6 +12,7 @@
 #include "globvrpb.h"
 #include "graphics.h"
 #include "harness/config.h"
+#include "newgame.h"
 #include "harness/trace.h"
 #include "init.h"
 #include "loading.h"
@@ -530,7 +531,13 @@ void DoGame(void) {
     } else {
         PrintMemoryDump(0, "BEFORE START RACE SCREEN");
         SelectOpponents(&gCurrent_race);
+#ifdef DETHRACE_FIX_BUGS
+        // dethrace: for --quick-race reuse the networked path, which loads the race
+        // info directly instead of going through the DoSelectRace() screen.
+        if (gNet_mode != eNet_mode_none || harness_game_config.quick_race >= 0) {
+#else
         if (gNet_mode != eNet_mode_none) {
+#endif
             LoadRaceInfo(gProgram_state.current_race_index, &gCurrent_race);
             FillInRaceInfo(&gCurrent_race);
             DisposeRaceInfo(&gCurrent_race);
@@ -553,7 +560,10 @@ void DoGame(void) {
             }
         } else {
             PrintMemoryDump(0, "AFTER START RACE SCREEN");
-            DoNewGameAnimation();
+#ifdef DETHRACE_FIX_BUGS
+            if (harness_game_config.quick_race < 0)
+#endif
+                DoNewGameAnimation();
             StartLoadingScreen();
             if (gNet_mode == eNet_mode_none) {
                 LoadOpponentsCars(&gCurrent_race);
@@ -592,6 +602,9 @@ void DoGame(void) {
                             && gProgram_state.prog_status == eProg_game_ongoing
                             && !gAbandon_game);
                     } else {
+#ifdef DETHRACE_FIX_BUGS
+                        if (harness_game_config.quick_race < 0)
+#endif
                         do {
                             options_result = DoGridPosition();
                             if (options_result == eSO_main_menu_invoked) {
@@ -709,6 +722,13 @@ void InitialiseProgramState(void) {
 // FUNCTION: CARM95 0x00414d8a
 void DoProgram(void) {
     InitialiseProgramState();
+#ifdef DETHRACE_FIX_BUGS
+    // dethrace: --quick-race skips logos, menus and driver select entirely.
+    if (harness_game_config.quick_race >= 0) {
+        QuickRaceStart(harness_game_config.quick_race, harness_game_config.quick_race_skill);
+        gProgram_state.prog_status = eProg_game_starting;
+    }
+#endif
     do {
         switch (gProgram_state.prog_status) {
         case eProg_intro:

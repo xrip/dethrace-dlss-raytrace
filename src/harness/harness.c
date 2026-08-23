@@ -289,6 +289,9 @@ int Harness_Init(int* argc, char* argv[]) {
     harness_game_config.demo_timeout = 240000;
     // disable developer diagnostics by default
     harness_game_config.enable_diagnostics = 0;
+    // go through the normal front-end unless a quick race is explicitly requested
+    harness_game_config.quick_race = -1;
+    harness_game_config.quick_race_skill = 1;
     // no volume multiplier
     harness_game_config.volume_multiplier = 1.0f;
     // start in fullscreen mode
@@ -420,6 +423,23 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
             harness_game_config.fps = atoi(s + 1);
             LOG_INFO2("FPS limiter set to %f", harness_game_config.fps);
             consumed = 1;
+        } else if (strcasecmp(argv[i], "--quick-race") == 0) {
+            harness_game_config.quick_race = 0;
+            LOG_INFO("Quick race enabled, starting race 0");
+            consumed = 1;
+        } else if (strstr(argv[i], "--quick-race=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            harness_game_config.quick_race = atoi(s + 1);
+            LOG_INFO2("Quick race enabled, starting race %d", harness_game_config.quick_race);
+            consumed = 1;
+        } else if (strstr(argv[i], "--skill=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            int skill = atoi(s + 1);
+            if (skill >= 0 && skill <= 2) {
+                harness_game_config.quick_race_skill = skill;
+                LOG_INFO2("Skill level set to %d", skill);
+            }
+            consumed = 1;
         } else if (strstr(argv[i], "--draw-distance=") != NULL) {
             char* s = strstr(argv[i], "=");
             float draw_distance = atof(s + 1);
@@ -511,6 +531,11 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
             consumed = 1;
         } else if (strcasecmp(argv[i], "--opengl") == 0) {
             harness_game_config.opengl_3dfx_mode = 1;
+            consumed = 1;
+        } else if (strcasecmp(argv[i], "--software") == 0) {
+            // Counterpart to --opengl. Needed because opengl_3dfx_mode now defaults to 1,
+            // so leaving --opengl off is no longer enough to get the software renderer.
+            harness_game_config.opengl_3dfx_mode = 0;
             consumed = 1;
         } else if (strcasecmp(argv[i], "--game-completed") == 0) {
             harness_game_config.game_completed = 1;

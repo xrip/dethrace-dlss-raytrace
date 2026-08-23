@@ -65,6 +65,12 @@ typedef struct tHarness_game_config {
     int opengl_3dfx_mode;
     int game_completed;
 
+    // Skip the front-end and drop straight into a race. -1 disables it, otherwise
+    // it is the index of the race to start. Used for renderer benchmarking and for
+    // capturing reproducible reference screenshots.
+    int quick_race;
+    int quick_race_skill;
+
     int install_signalhandler;
     int no_bind;
     char network_adapter_name[256];

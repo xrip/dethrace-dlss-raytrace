@@ -177,4 +177,7 @@ void DisposeNetStorageSpace(void);
 
 int DoMultiPlayerStart(void);
 
+// dethrace addition: start pRace_index directly, bypassing the front-end.
+void QuickRaceStart(int pRace_index, int pSkill_level);
+
 #endif
