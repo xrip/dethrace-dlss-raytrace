@@ -25,7 +25,7 @@ root.
 |---|---|---|---|
 | OpenGL | `--opengl` | `glrend` | Full 3D. The reference implementation and the A/B baseline. |
 | Software | `--software` | `softrend` + `virtualframebuffer` | Full 3D on CPU. |
-| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 3 parity in progress; stored 3D, textures, depth, HUD composition, and live deformation work.** |
+| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 3 stored-model parity is implemented; split targets and motion/depth prerequisites are ready for Stage 4.** |
 
 Note `opengl_3dfx_mode` defaults to `1` in this tree, so omitting `--opengl` does *not*
 select the software renderer — that is what `--software` is for.
@@ -49,7 +49,7 @@ select the software renderer — that is what `--software` is for.
 
 ### 2026-08-23 continuation — Stage 2 plus first real Vulkan models
 
-Uncommitted work in the BRender submodule now goes beyond the old Stage 1 state:
+Committed work in the BRender submodule now goes beyond the old Stage 1 state:
 
 * Stage 2 presents the real RGB565/indexed BRender back buffer through per-frame mapped
   upload buffers, `VkImage`, `vkCmdCopyBufferToImage`, nearest `vkCmdBlitImage`, and
@@ -91,7 +91,7 @@ Evidence:
 
 ### 2026-08-23 continuation — Stage 3 parity work
 
-The current uncommitted BRender work adds these Stage 3 parts:
+The committed BRender work adds these Stage 3 parts:
 
 * Ordered stored geometry now keeps BRender bucket order and the selected stored renderer
   state through the Vulkan draw. The four BRender blend modes and colour-write state select
@@ -133,10 +133,19 @@ Evidence:
 * The Release build passes. A 24-second Race 0 Vulkan run stayed live with zero matching
   validation, fatal, assertion, or crash log lines.
 
-Stage 3 is not complete yet. The 3dfx smoke, tyre-smoke, skid, and spark set is deferred for
-a later focused pass. The remaining Stage 3 gates are a longer full-race completion check,
-direct OpenGL A/B effect proof, and release/tag documentation. DLSS and Frame Generation remain
-later-stage work.
+* `staging/reference/stage3-opengl-current-r3/`, `stage3-software-current-r3/`, and
+  `stage3-vulkan-current-r3/` — nine-view Race 0 captures at the same 1200x900 client size;
+  every frame is distinct and all camera, mirror, and map toggles land on Vulkan. Vulkan vs
+  OpenGL mean absolute error is 6.07-19.89 on the moving views and 1.31 on map; Vulkan vs
+  software is 15.69-33.67 on the moving views and 3.07 on map. The remaining difference is
+  normal raster/filter and renderer timing variation, not a missing camera path.
+* The capture helper now holds synthetic toggle keys for 250 ms so the 15 FPS Vulkan path gets
+  a complete event-poll pass. The focused probe confirmed cockpit, mirror, and map transitions.
+
+Stage 3 is complete for the current stored-model scope. The 3dfx smoke, tyre-smoke, skid-line,
+and spark set is explicitly deferred for a later focused pass. The 60-second Race 0 validation
+is clean; release tagging is still a project decision. DLSS and Frame Generation remain Stage 4+
+work.
 
 Four commits, oldest first.
 
@@ -319,9 +328,9 @@ src/harness/platforms/sdl2.c   window, surface, instance extensions, drawable si
 
 Stored triangle models, textures, depth, live deformation, HUD composition, fog, ordered
 blends, environment mapping, the rear-view mirror, map mode, lighting/clip state, mip
-generation, sampler selection, and FPS telemetry work. The remaining gates are a
-validation-clean full-race completion, direct OpenGL A/B effect proof, and release/tag documentation;
-the smoke/skid/spark pass is explicitly deferred by the current user decision.
+generation, sampler selection, FPS telemetry, and the nine-view OpenGL/software/Vulkan parity
+capture work. The current stored-model scope is validation-clean; the smoke/skid/spark pass is
+explicitly deferred by the current user decision.
 
 The Vulkan SDK is installed at `C:/VulkanSDK/1.4.357.0`. Validation was exercised across the
 nine-view texture capture and the deformation run, with no Vulkan warning/error, fatal, or

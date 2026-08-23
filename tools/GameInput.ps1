@@ -88,7 +88,9 @@ $Global:EXTENDED = @('up', 'down', 'left', 'right')
 
 function Focus-Game([IntPtr]$hwnd) { [GI]::ForceForeground($hwnd); Start-Sleep -Milliseconds 350 }
 
-function Send-Scan([IntPtr]$hwnd, [string]$name, [int]$holdMs = 60, [int]$repeat = 1) {
+# Vulkan validation can run at about 15 FPS while pipelines and images settle.
+# Keep a toggle down long enough for at least one event-poll pass.
+function Send-Scan([IntPtr]$hwnd, [string]$name, [int]$holdMs = 250, [int]$repeat = 1) {
     if (-not $SCAN.ContainsKey($name)) { throw "unknown key '$name'" }
     $scan = [uint16]$SCAN[$name]
     $ext = $EXTENDED -contains $name
