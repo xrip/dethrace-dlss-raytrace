@@ -259,7 +259,7 @@ void DeleteNode(tS16 pNode_to_delete, int pAnd_sections);
 
 void DeleteOrphanNodes(void);
 
-void InsertThisNodeInThisSectionHere(tS16 pInserted_node, tS16 pSection_no, br_vector3* pWhere);
+int InsertThisNodeInThisSectionHere(tS16 pInserted_node, tS16 pSection_no, br_vector3* pWhere);
 
 void TrackElasticateyPath(void);
 

@@ -3399,17 +3399,25 @@ void DeleteOrphanNodes(void) {
 
 // IDA: void __usercall InsertThisNodeInThisSectionHere(tS16 pInserted_node@<EAX>, tS16 pSection_no@<EDX>, br_vector3 *pWhere@<EBX>)
 // FUNCTION: CARM95 0x0040fb06
-void InsertThisNodeInThisSectionHere(tS16 pInserted_node, tS16 pSection_no, br_vector3* pWhere) {
+int InsertThisNodeInThisSectionHere(tS16 pInserted_node, tS16 pSection_no, br_vector3* pWhere) {
     tS16 new_section;
     tS16 section_no_index;
     tS16 node1;
     tS16 node2;
     tS16 node3;
 
+    if (pInserted_node < 0 || pInserted_node >= gProgram_state.AI_vehicles.number_of_path_nodes
+        || pSection_no < 0 || pSection_no >= gProgram_state.AI_vehicles.number_of_path_sections) {
+        return 0;
+    }
+
     node1 = gProgram_state.AI_vehicles.path_sections[pSection_no].node_indices[0];
     node2 = pInserted_node;
     node3 = gProgram_state.AI_vehicles.path_sections[pSection_no].node_indices[1];
     new_section = ReallocExtraPathSections(1);
+    if (new_section < 0 || new_section >= gProgram_state.AI_vehicles.number_of_path_sections) {
+        return 0;
+    }
     gProgram_state.AI_vehicles.path_sections[new_section].node_indices[0] = node2;
     gProgram_state.AI_vehicles.path_sections[new_section].node_indices[1] = node3;
     gProgram_state.AI_vehicles.path_sections[new_section].min_speed[0] = 0;
@@ -3436,6 +3444,7 @@ void InsertThisNodeInThisSectionHere(tS16 pInserted_node, tS16 pSection_no, br_v
             gProgram_state.AI_vehicles.path_nodes[node3].sections[section_no_index] = new_section;
         }
     }
+    return 1;
 }
 
 // IDA: void __cdecl TrackElasticateyPath()
@@ -4164,6 +4173,10 @@ void DropElasticateyNode(void) {
         one_wayness = gProgram_state.AI_vehicles.path_sections[gMobile_section].one_way;
         new_node = ReallocExtraPathNodes(1);
         gMobile_section = ReallocExtraPathSections(1);
+        if (new_node < 0 || new_node >= gProgram_state.AI_vehicles.number_of_path_nodes
+            || gMobile_section < 0 || gMobile_section >= gProgram_state.AI_vehicles.number_of_path_sections) {
+            return;
+        }
     } else {
         if (!gOppo_paths_shown) {
             NewTextHeadupSlot(eHeadupSlot_misc, 0, 2000, -kFont_ORANGHED, "You must show paths before adding to them (F5)");
@@ -4193,6 +4206,10 @@ void DropElasticateyNode(void) {
             gAlready_elasticating = 1;
             new_node = ReallocExtraPathNodes(1);
             gMobile_section = ReallocExtraPathSections(1);
+            if (new_node < 0 || new_node >= gProgram_state.AI_vehicles.number_of_path_nodes
+                || gMobile_section < 0 || gMobile_section >= gProgram_state.AI_vehicles.number_of_path_sections) {
+                return;
+            }
             one_wayness = 0;
         }
     }
@@ -4242,6 +4259,10 @@ void InsertAndElasticate(void) {
         return;
     }
     section_no = FindNearestPathSection(&gSelf->t.t.translate.t, &direction_v, &intersect, &distance);
+    if (section_no < 0 || section_no >= gProgram_state.AI_vehicles.number_of_path_sections) {
+        NewTextHeadupSlot(eHeadupSlot_misc, 0, 2000, -kFont_ORANGHED, "No opponent path section found");
+        return;
+    }
     BrVector3Sub(&wank,
         &gProgram_state.AI_vehicles.path_nodes[gProgram_state.AI_vehicles.path_sections[section_no].node_indices[0]].p,
         &intersect);
@@ -4258,15 +4279,24 @@ void InsertAndElasticate(void) {
         NewTextHeadupSlot(eHeadupSlot_misc, 0, 2000, -kFont_ORANGHED, "Get nearer to the section");
     } else {
         new_section = ReallocExtraPathSections(1);
+        if (new_section < 0 || new_section >= gProgram_state.AI_vehicles.number_of_path_sections) {
+            return;
+        }
         if (gAlready_elasticating) {
             inserted_node = gProgram_state.AI_vehicles.path_sections[gMobile_section].node_indices[1];
             section_type = gProgram_state.AI_vehicles.path_sections[gMobile_section].type;
             one_wayness = gProgram_state.AI_vehicles.path_sections[gMobile_section].one_way;
             elasticatey_node = ReallocExtraPathNodes(1);
+            if (elasticatey_node < 0 || elasticatey_node >= gProgram_state.AI_vehicles.number_of_path_nodes) {
+                return;
+            }
             gProgram_state.AI_vehicles.path_nodes[elasticatey_node].number_of_sections = 0;
             gProgram_state.AI_vehicles.path_sections[new_section].width = gProgram_state.AI_vehicles.path_sections[gMobile_section].width;
         } else {
             inserted_node = ReallocExtraPathNodes(2);
+            if (inserted_node < 0 || inserted_node + 1 >= gProgram_state.AI_vehicles.number_of_path_nodes) {
+                return;
+            }
             gProgram_state.AI_vehicles.path_nodes[inserted_node].number_of_sections = 0;
             elasticatey_node = inserted_node + 1;
             gProgram_state.AI_vehicles.path_nodes[elasticatey_node].number_of_sections = 0;
@@ -4274,7 +4304,9 @@ void InsertAndElasticate(void) {
             section_type = gProgram_state.AI_vehicles.path_sections[section_no].type;
             one_wayness = gProgram_state.AI_vehicles.path_sections[section_no].one_way;
         }
-        InsertThisNodeInThisSectionHere(inserted_node, section_no, &gSelf->t.t.translate.t);
+        if (!InsertThisNodeInThisSectionHere(inserted_node, section_no, &gSelf->t.t.translate.t)) {
+            return;
+        }
         gMobile_section = new_section;
         gProgram_state.AI_vehicles.path_sections[gMobile_section].node_indices[0] = inserted_node;
         gProgram_state.AI_vehicles.path_sections[gMobile_section].node_indices[1] = elasticatey_node;
@@ -4313,6 +4345,10 @@ void InsertAndDontElasticate(void) {
         return;
     }
     section_no = FindNearestPathSection(&gSelf->t.t.translate.t, &direction_v, &intersect, &distance);
+    if (section_no < 0 || section_no >= gProgram_state.AI_vehicles.number_of_path_sections) {
+        NewTextHeadupSlot(eHeadupSlot_misc, 0, 2000, -kFont_ORANGHED, "No opponent path section found");
+        return;
+    }
     BrVector3Sub(&wank, &gProgram_state.AI_vehicles.path_nodes[gProgram_state.AI_vehicles.path_sections[section_no].node_indices[0]].p, &intersect);
     if (BrVector3Length(&wank) == 0.f) {
         not_perp = 1;
@@ -4329,9 +4365,14 @@ void InsertAndDontElasticate(void) {
             inserted_node = gProgram_state.AI_vehicles.path_sections[gMobile_section].node_indices[1];
         } else {
             inserted_node = ReallocExtraPathNodes(1);
+            if (inserted_node < 0 || inserted_node >= gProgram_state.AI_vehicles.number_of_path_nodes) {
+                return;
+            }
             gProgram_state.AI_vehicles.path_nodes[inserted_node].number_of_sections = 0;
         }
-        InsertThisNodeInThisSectionHere(inserted_node, section_no, &gSelf->t.t.translate.t);
+        if (!InsertThisNodeInThisSectionHere(inserted_node, section_no, &gSelf->t.t.translate.t)) {
+            return;
+        }
         ShowOppoPaths();
         sprintf(str, "New node #%d inserted into section #%d", inserted_node, section_no);
         NewTextHeadupSlot(eHeadupSlot_misc, 0, 2000, -kFont_ORANGHED, str);
