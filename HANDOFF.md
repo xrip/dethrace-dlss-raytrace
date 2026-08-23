@@ -25,7 +25,7 @@ root.
 |---|---|---|---|
 | OpenGL | `--opengl` | `glrend` | Full 3D. The reference implementation and the A/B baseline. |
 | Software | `--software` | `softrend` + `virtualframebuffer` | Full 3D on CPU. |
-| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 1: device + swapchain + present. No 3D yet.** |
+| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 2 complete; Stage 3 stored 3D, textures, depth, and HUD composition work.** |
 
 Note `opengl_3dfx_mode` defaults to `1` in this tree, so omitting `--opengl` does *not*
 select the software renderer — that is what `--software` is for.
@@ -46,6 +46,52 @@ select the software renderer — that is what `--software` is for.
 ---
 
 ## 2. What was implemented in this session
+
+### 2026-08-23 continuation — Stage 2 plus first real Vulkan models
+
+Uncommitted work in the BRender submodule now goes beyond the old Stage 1 state:
+
+* Stage 2 presents the real RGB565/indexed BRender back buffer through per-frame mapped
+  upload buffers, `VkImage`, `vkCmdCopyBufferToImage`, nearest `vkCmdBlitImage`, and
+  swapchain rebuild on out-of-date/suboptimal results.
+* The API-neutral renderer state path is active (`state*.c`, `cache.c`, `sstate.c`); renderer
+  state, transforms, stored state, and queries are no longer no-op success stubs.
+* `vkscene.c` owns a separate HUD-less colour image and D32 depth image and records Vulkan
+  1.3 dynamic rendering. This split is intentional for later DLSS/FG resource tagging.
+* `gstored.c` creates Vulkan vertex/index buffers and issues real indexed draws for BRender
+  `v11model` groups. Positions are copied from the prepared model before every draw, so
+  `BrModelUpdate(..., BR_MODU_VERTEX_POSITIONS)` is not frozen at allocation time.
+* `sbuffer.c` uploads indexed and RGB565 material maps to RGBA8 Vulkan images. A real
+  BRender device CLUT supplies the live 256-colour palette; descriptors are allocated
+  lazily and rebuilt after scene-resource recreation.
+* Textured and plain material pipelines now use prepared UVs, BRender surface colour, and
+  black colour-key discard. The player car and track render with their real colour maps.
+* The CPU 2D layer is staged before the scene, cleared to magenta, and then composed over
+  the separate HUD-less Vulkan colour target after 3D. This keeps HUD data separate from
+  the future DLSS scene input.
+* Stored geometry freed before `sceneEnd` is released after GPU submission. Validation found
+  this lifetime difference from immediate-mode OpenGL.
+* Camera Z handedness is converted once in `cache.c`; viewport Y uses a negative height.
+* `model.vert` / `model.frag` are GLSL 450 and committed SPIR-V is embedded at build time.
+
+Evidence:
+
+* `staging/reference/vulkan-stage2/01-menu-upload.png` — real Stage 2 menu upload.
+* `staging/reference/vulkan-stage2/02-race-2d.png` — Stage 2 HUD and black 3D area.
+* `staging/reference/vulkan-model-check/race-geometry-colours.png` — real Vulkan track and
+  player-car geometry with depth and perspective.
+* `staging/reference/vulkan-composite/race-hud-3d.png` — CPU HUD composed over Vulkan 3D.
+* `staging/reference/vulkan-textures-colour/` — nine distinct runtime views with real
+  palette-coloured material textures.
+* `staging/reference/vulkan-deformation/02-powerup-message.png` and
+  `03-after-damage.png` — the normal power-up 13 `TrashBodywork` path visibly deforms the
+  Vulkan-rendered car. The automated car-area delta is 34.9%.
+* Release build is current. The release build has no registered CTest tests. Full SDK
+  1.4.357 runtime captures report zero Vulkan warning/error, fatal, or crash messages.
+
+Current limits: lighting, fog, blend/order-table parity, and immediate-mode geometry are not
+ported. Motion vectors, render/display resolution split, DLSS, and Frame Generation belong
+to later stages.
 
 Four commits, oldest first.
 
@@ -128,14 +174,16 @@ VKREND: swapchain 800x600, 3 images, format 44, present mode 2
 * `dethrace --vulkan` opens a Vulkan window, creates instance → physical device → logical
   device → 3-image swapchain (`VK_FORMAT_B8G8R8A8_UNORM`, FIFO).
 * The game boots and runs on the Vulkan path without crashing, including with `--quick-race`.
-* Frames present: the window shows the clear colour set in `doubleBuffer`
-  (RGB 0.10/0.25/0.45) — proving acquire → record → clear → barrier → submit → present is
-  driven end-to-end by the game's own frame loop.
+* Frames present the real indexed/RGB565 CPU layer, real textured BRender stored models,
+  D32-tested 3D, and the magenta-keyed HUD overlay through one Vulkan command path.
+* The normal game deformation route updates the visible Vulkan mesh. The regression command
+  is `tools/capture_vulkan_deformation.ps1 -Repo .`.
 * Clean shutdown: `WM_CLOSE` → **exit code 0**, no Vulkan errors logged.
 * `--opengl` and `--software` are unaffected (re-checked after all changes; both render
   distinct, non-blank frames).
-* Builds with **no Vulkan SDK installed** — glad is vendored and self-contained, and nothing
-  links against a Vulkan library.
+* It can build on a machine with **no Vulkan SDK installed** — glad is vendored and
+  self-contained, and nothing links against a Vulkan library. The SDK used for validation
+  on this machine is only a build/runtime checking tool.
 
 Stage 0 reference sets exist at `staging/reference/{opengl,software}/` (9 frames each,
 gitignored, ~36 MB, not committed).
@@ -179,11 +227,14 @@ lib/BRender-v1.3.2/drivers/vkrend/
     driver.c     BrDrv1VKBegin — creates the BRT_VULKAN_CALLBACKS_P token
     device.c     br_device, output/renderer facilities, token matching
     outfcty.c    output facility → pixelmapNew
-    devpixmp.c   screen pixelmap (owns br_vk_state); doubleBuffer = acquire/clear/present
+    devpixmp.c   screen pixelmap; stage CPU layers, acquire, compose, submit, present
     vksetup.c    instance, physical device, logical device, swapchain, frame sync
     rendfcty.c   renderer facility (+ null geometry objects)
-    renderer.c   no-op renderer (stage 3 fills this in)
-    gv1model.c   no-op V1Model geometry format
+    renderer.c   renderer lifecycle and state application
+    gstored.c    persistent indexed model geometry and draw dispatch
+    sbuffer.c    material texture upload and descriptors
+    vkscene.c    scene colour/depth targets, pipelines, composition, GPU lifetimes
+    gv1model.c   V1 stored-model geometry format; immediate mode remains unsupported
     glad/        vendored, self-contained Vulkan 1.4 loader (MX mode)
         ▲
         │  br_device_vk_callback_procs (void* handles — core stays free of Vulkan headers)
@@ -219,30 +270,15 @@ src/harness/platforms/sdl2.c   window, surface, instance extensions, drawable si
 
 ## 5. What is incomplete or broken
 
-### The Vulkan renderer draws nothing
+### Remaining Stage 3 parity work
 
-`renderer.c` accepts every call and draws nothing; `gv1model.c` accepts models and draws
-nothing; `rendererNew` succeeds but produces a renderer with no pipeline. **The window shows
-a flat clear colour, not the game.** This is expected at stage 1 and is the entire content of
-stages 2–3.
+Stored triangle models, textures, depth, live deformation, and HUD composition work. The
+remaining gaps are lighting, fog, blend/order-table parity, and immediate-mode geometry.
+`gv1model.c` reports immediate mode as unsupported once instead of silently claiming success.
 
-Two deliberate compromises exist so the game can boot at all, and both should be revisited:
-
-* `renderer.c` returns `BRE_OK` from state calls it ignores, because the game treats a failed
-  state call as fatal. Once the real state machinery lands, these must return real results.
-* `gv1model.c`'s `storedNew` returns `BRE_FAIL`, so the v1db falls back to immediate mode,
-  where `render` silently accepts. This is a stub, not a design.
-
-### Validation layers were never exercised
-
-No Vulkan SDK is installed on this machine (`C:/VulkanSDK` absent, no `glslc` in PATH). The
-driver requests `VK_LAYER_KHRONOS_validation`, logs
-`validation layers requested but not available, continuing without`, and proceeds.
-
-**This is the one stage-1 acceptance criterion that could not be verified.** Installing the
-SDK is the first thing the next person should do — a Vulkan port developed without validation
-accumulates silent corruption. The driver already picks the layers up automatically at
-runtime once present.
+The Vulkan SDK is installed at `C:/VulkanSDK/1.4.357.0`. Validation was exercised across the
+nine-view texture capture and the deformation run, with no Vulkan warning/error, fatal, or
+crash messages.
 
 ### Known issues not caused by this work
 
@@ -262,8 +298,8 @@ runtime once present.
   *"not our ref"*. It now has a named branch (`feature/vulkan-renderer`) in this worktree so a
   stray `gc` cannot orphan it, **but it still needs pushing somewhere.** Same now applies to
   the new `46177e4`.
-* `vkrend` has no resize handling. `VK_ERROR_OUT_OF_DATE_KHR` currently skips the frame;
-  stage 2 must rebuild the swapchain.
+* Swapchain resize/rebuild works. Texture descriptor sets are lazily recreated when scene
+  resources change; individual sets are kept until the descriptor pool is rebuilt.
 * Motion vectors (plan stage 4c) remain the highest-risk item for DLSS. The useful finding:
   `core/v1db/modrend.c:19` `renderFaces()` already has `br_actor *actor` in scope exactly
   where geometry is dispatched to the driver — it simply does not forward it. That makes
@@ -312,6 +348,7 @@ cmake-build-tests/dethrace_test.exe
 ```
 powershell -ExecutionPolicy Bypass -File tools/capture_reference.ps1 `
   -Tag opengl -GameArgs '--opengl' -Repo <repo>
+powershell -ExecutionPolicy Bypass -File tools/capture_vulkan_deformation.ps1 -Repo <repo>
 ```
 
 Three things in that harness are load-bearing and documented in `tools/GameInput.ps1`:
@@ -330,10 +367,10 @@ Three things in that harness are load-bearing and documented in `tools/GameInput
 
 | Check | Result |
 |---|---|
-| Release build | **pass**, exit 0 |
-| Test build (`BUILD_TESTS=ON`) | **pass**, exit 0, 317/317 targets |
-| Test suite | **8 passed, 1 failed**, exit 15 — `test_loading_GetCDPathFromPathsTxtFile` (pre-existing, see §5) |
-| `--vulkan` runtime | instance + device + 3-image swapchain, presents clear colour, `WM_CLOSE` → exit 0 |
+| Release build | **pass**, current (`ninja: no work to do`) |
+| Release CTest | no tests registered in this build directory |
+| `--vulkan` nine-view runtime | **pass**, distinct textured frames, exit 0, no Vulkan/runtime failures |
+| Vulkan deformation | **pass**, bodywork message + visibly deformed mesh, 34.9% car-area delta, exit 0 |
 | `--opengl` runtime | renders normally, non-blank |
 | `--software` runtime | renders normally, non-blank |
 
@@ -341,28 +378,19 @@ Three things in that harness are load-bearing and documented in `tools/GameInput
 
 ## 7. Current objective and next steps
 
-**Current objective:** stage 1 (Vulkan bring-up) is complete. The next milestone is **stage 2:
-2D parity** — get the game's actual output on screen through Vulkan.
+**Current objective:** Stage 2 upload is complete. Stage 3 now draws textured stored 3D
+models, preserves a separate HUD-less scene target, composes the HUD, and renders normal game
+deformation. Finish **Stage 3 parity** without losing those paths.
 
 Ordered by priority:
 
-1. **Install the Vulkan SDK and re-run everything with validation enabled.** Do this before
-   writing more Vulkan code. Fix whatever it reports.
-2. **Push the BRender submodule commits** (`6201593`, `46177e4`) to a remote. They exist only
+1. **Port lighting, fog, blend, and order-table parity.** Keep the current plain/textured
+   pipeline split small; add only the variants the game state actually needs.
+2. **Push the BRender submodule work** to a remote. It exists only
    on this machine.
-3. **Stage 2 — 2D parity.** Replace the clear in `devpixmp.c`'s `doubleBuffer` with a real
-   upload of the game's back buffer:
-   * host-visible staging buffer + `vkCmdCopyBufferToImage` into the swapchain image;
-   * swapchain rebuild on `VK_ERROR_OUT_OF_DATE_KHR` / window resize;
-   * then port the offscreen pixelmap properly (`match`, `directLock`/`directUnlock`/`flush`,
-     the magenta-keyed overlay composite, `rectangleCopyTo`/`StretchCopy`/`Fill`, `devclut`).
-   * **Done when:** menus, intro FMV, palette fades and the HUD match the stage 0 OpenGL
-     reference set. The 3D viewport may still be black.
-4. **Stage 3 — 3D parity.** Port state machinery (`state*.c`, `cache.c`, `sstate.c` — largely
-   API-agnostic), textures (`sbuffer.c` → `VkImage`), pipelines (dynamic state +
-   `VK_EXT_extended_dynamic_state`, small pipeline cache), descriptors (set0 scene, set1 model
-   via dynamic offset, set2 texture), geometry (`gstored.c`), and translate
-   `brender.vert/frag.glsl` to GLSL 450 → SPIR-V.
+3. **Add immediate-mode geometry or prove every required game path is stored.** It currently
+   reports one unsupported warning and returns failure.
+4. **Finish Stage 3 visual parity.** Compare all nine views against OpenGL and software.
    * Watch the clip-space difference: GL is z ∈ [-1,1] y-up, Vulkan z ∈ [0,1] y-down. Fix it
      in **one** place (the projection conversion), not in the shaders. Verify with an
      asymmetric scene — a symmetric one hides mirroring bugs.
@@ -371,9 +399,10 @@ Ordered by priority:
      for OpenGL, and it applies to Vulkan via `opengl_3dfx_mode`. Matching `glrend` alone is
      not sufficient — check against the software reference too.
    * **Stage 3 is a shippable release** in its own right. Tag it.
-5. **Stages 4–6 — DLSS.** Re-scope only once stage 3 runs. Stage 4 (split render/display
+5. **Stages 4–6 — DLSS.** Re-scope only once stage 3 parity is complete. Stage 4 (split render/display
    resolution, depth as sampled image, motion vectors, jitter) is the hard part; stages 5–6
-   are the SDK integration. Expect **2x** FG, not 4x.
+   are the SDK integration. Current Streamline documentation keeps Dynamic Multi Frame
+   Generation on D3D12; do not promise that mode on Vulkan.
 
 ---
 
@@ -398,7 +427,9 @@ Ordered by priority:
 
 ## 9. Repository state
 
-Committed on `feature/vulkan-renderer`; working tree clean apart from the ignored paths below.
+The Stage 2/3 continuation is uncommitted in the root worktree and the BRender submodule.
+Do not discard it. `Carma/`, the local SDL tree, build folders, and captures remain local
+support data.
 
 Intentionally **not** committed (all gitignored):
 
