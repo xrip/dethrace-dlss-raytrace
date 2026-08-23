@@ -3437,6 +3437,8 @@ void SkidNoise(tCar_spec* pC, int pWheel_num, br_scalar pV, int material) {
     br_vector3 world_pos;
     br_vector3 wv;
     br_vector3 wvw;
+    br_vector3 spark_force;
+    br_vector3 spark_velocity;
     br_scalar ts;
     // GLOBAL: CARM95 0x00514E58
     static tS3_volume last_skid_vol[2];
@@ -3474,14 +3476,29 @@ void SkidNoise(tCar_spec* pC, int pWheel_num, br_scalar pV, int material) {
                 0x10000);
             gLast_car_to_skid[i] = pC;
         }
-        if (gCurrent_race.material_modifiers[material].smoke_type != 1) {
-        } else {
-            BrVector3Cross(&wv, &pC->omega, &pos);
-            BrVector3Add(&wv, &wv, &pC->velocity_car_space);
-            ts = -(BrVector3Dot(&wv, &pC->road_normal));
-            BrVector3Scale(&wvw, &pC->road_normal, ts);
-            BrVector3Accumulate(&wv, &wvw);
-            BrMatrix34ApplyV(&wvw, &wv, &pC->car_master_actor->t.t.mat);
+        BrVector3Cross(&wv, &pC->omega, &pos);
+        BrVector3Add(&wv, &wv, &pC->velocity_car_space);
+        ts = -(BrVector3Dot(&wv, &pC->road_normal));
+        BrVector3Scale(&wvw, &pC->road_normal, ts);
+        BrVector3Accumulate(&wv, &wvw);
+        BrMatrix34ApplyV(&wvw, &wv, &pC->car_master_actor->t.t.mat);
+
+        // A sliding wheel can scrape the road and produce sparks. Use the
+        // same material sparkiness and shared renderer as collision sparks.
+        if (pV > 0.0001f
+            && gCurrent_race.material_modifiers[material].sparkiness > 0.0f
+            && BrVector3LengthSquared(&pC->road_normal) > 0.0001f) {
+            BrVector3Scale(&spark_force, &pC->road_normal, pV);
+            BrVector3Copy(&spark_velocity, &wvw);
+            CreateSparks(
+                &world_pos,
+                &spark_velocity,
+                &spark_force,
+                gCurrent_race.material_modifiers[material].sparkiness,
+                pC);
+        }
+
+        if (gCurrent_race.material_modifiers[material].smoke_type == 1) {
             CreatePuffOfSmoke(&world_pos, &wvw, pV / 25.0f, 1.0, 4, pC);
         }
     }

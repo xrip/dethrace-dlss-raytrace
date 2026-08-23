@@ -604,8 +604,10 @@ void InitialiseApplication(int pArgc, char** pArgv) {
 
 #ifdef DETHRACE_3DFX_PATCH
 
-    // dethrace: if statement added to support all types of games
-    if (harness_game_config.opengl_3dfx_mode) {
+    // Initialise BRender effect overlays only when the 3dfx renderer is active.
+    // Software mode keeps its direct framebuffer spark/smoke implementation;
+    // flames and splashes are shared actor effects in both modes.
+    if (gNo_2d_effects) {
         InitLineStuff();
         InitSmokeStuff();
         Init2DStuff();

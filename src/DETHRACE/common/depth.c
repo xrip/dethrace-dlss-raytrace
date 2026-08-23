@@ -7,6 +7,7 @@
 #include "globvrbm.h"
 #include "globvrkm.h"
 #include "globvrpb.h"
+#include "harness/config.h"
 #include "harness/hooks.h"
 #include "harness/trace.h"
 #include "init.h"
@@ -639,6 +640,7 @@ void DoHorizon(br_pixelmap* pRender_buffer, br_pixelmap* pDepth_buffer, br_actor
 
 #ifdef DETHRACE_3DFX_PATCH
         || gBlitting_is_slow
+        || harness_game_config.opengl_3dfx_mode
 #endif
     ) {
         if (gRendering_mirror) {

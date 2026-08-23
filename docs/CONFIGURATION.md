@@ -53,7 +53,7 @@ WindowWidth = 1920
 WindowHeight = 1080
 
 ; Maximum planned view distance
-DrawDistance = 280
+DrawDistance = 700
 
 ; 0 keeps the highest-detail car model at every distance
 CarLodDistanceScale = 0
