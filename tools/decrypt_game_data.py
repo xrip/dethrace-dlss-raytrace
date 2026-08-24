@@ -13,19 +13,85 @@ That is what makes decrypting safe: the game's line reader already handles
 plaintext lines. The only thing rejecting a decrypted file is the first-byte
 '@' check in OldDRfopen() (src/DETHRACE/common/loading.c:3472).
 
-The cipher itself is reused from tools/decode_datatxt.py -- not reimplemented.
+This file contains the full cipher and has no project-local dependencies. It can
+be copied next to any Carmageddon data pack and run with Python 3. Comment-only
+lines and inline comments are decoded too; the cipher changes key after a
+decoded ``//`` marker.
 
 Every file is verified by re-encrypting the decrypted result and comparing it
 byte-for-byte with the original. A file is only written if that check passes.
 """
 
 import argparse
+import enum
 import pathlib
-import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from decode_datatxt import CODECS, Method  # noqa: E402
+LONG_KEY = (
+    0x6C, 0x1B, 0x99, 0x5F, 0xB9, 0xCD, 0x5F, 0x13,
+    0xCB, 0x04, 0x20, 0x0E, 0x5E, 0x1C, 0xA1, 0x0E,
+)
+OTHER_LONG_KEY = (
+    0x67, 0xA8, 0xD6, 0x26, 0xB6, 0xDD, 0x45, 0x1B,
+    0x32, 0x7E, 0x22, 0x13, 0x15, 0xC2, 0x94, 0x37,
+)
+DEMO_KEY = (
+    0x58, 0x50, 0x3A, 0x76, 0xCB, 0xB6, 0x85, 0x65,
+    0x15, 0xCD, 0x5B, 0x07, 0xB1, 0x68, 0xDE, 0x3A,
+)
+
+
+class Method(enum.Enum):
+    Method1 = "1"
+    Method2 = "2"
+    Demo = "demo"
+
+
+class Codec:
+    def __init__(self, method):
+        self.method = method
+
+    def _crypt_line(self, line, decoding):
+        line = line.rstrip(b"\r\n")
+        key = DEMO_KEY if self.method == Method.Demo else LONG_KEY
+        seed = len(line) % len(key)
+        result = bytearray()
+
+        for i, value in enumerate(line):
+            if self.method != Method.Demo:
+                prior = result if decoding else line
+                if prior[max(0, i - 2):i] == b"//":
+                    key = OTHER_LONG_KEY
+
+            if self.method == Method.Method2:
+                if value == ord("\t"):
+                    value = 0x80
+                value = (value - 0x20) & 0xFF
+                if value & 0x80 == 0:
+                    value ^= key[seed] & 0x7F
+                value = (value + 0x20) & 0xFF
+                if value == 0x80:
+                    value = ord("\t")
+            else:
+                if value == ord("\t"):
+                    value = 0x9F
+                value = (((value - 0x20) ^ key[seed]) & 0x7F) + 0x20
+                if value == 0x9F:
+                    value = ord("\t")
+                if not decoding and self.method == Method.Demo \
+                        and value in (ord("\n"), ord("\r")):
+                    value |= 0x80
+
+            result.append(value)
+            seed = (seed + 7) % len(key)
+
+        return bytes(result)
+
+    def decode_line(self, line):
+        return self._crypt_line(line, True)
+
+    def encode_line(self, line):
+        return self._crypt_line(line, False)
 
 
 def split_lines(data):
@@ -76,8 +142,34 @@ def detect_method(root):
     head = general.read_bytes().split(b"\n", 1)[0]
     if head[:1] != b"@":
         return Method.Method2
-    decoded = CODECS[Method.Method1]().decode_line(head[1:].rstrip(b"\r\n"))
+    decoded = Codec(Method.Method1).decode_line(head[1:].rstrip(b"\r\n"))
     return Method.Method1 if decoded[:6] == b"0.01\t\t" else Method.Method2
+
+
+def plaintext_score(data):
+    """Count bytes which are not normal Carmageddon text."""
+    return sum(
+        value not in (ord("\t"), ord("\r"), ord("\n"))
+        and not 0x20 <= value <= 0x7E
+        for value in data
+    )
+
+
+def select_method(data, default_method):
+    """Use the pack method unless another retail method is clearly better."""
+    if default_method == Method.Demo:
+        return default_method
+
+    other_method = (
+        Method.Method1
+        if default_method == Method.Method2
+        else Method.Method2
+    )
+    candidates = []
+    for method in (default_method, other_method):
+        plain = decrypt(data, Codec(method))
+        candidates.append((plaintext_score(plain), method != default_method, method))
+    return min(candidates, key=lambda candidate: candidate[:2])[2]
 
 
 def main():
@@ -96,12 +188,14 @@ def main():
     if not (root / "DATA").is_dir():
         ap.error(f"{root} does not contain a DATA/ directory")
 
-    method = Method(args.method) if args.method else detect_method(root)
-    codec = CODECS[method]()
-    print(f"cipher method: {method.value}")
+    forced_method = Method(args.method) if args.method else None
+    default_method = forced_method or detect_method(root)
+    suffix = " (forced)" if forced_method else " (per-file fallback enabled)"
+    print(f"cipher method: {default_method.value}{suffix}")
 
     encrypted = skipped = written = 0
     failures = []
+    method_counts = {method: 0 for method in Method}
 
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix.upper() != ".TXT":
@@ -112,6 +206,9 @@ def main():
             continue
         encrypted += 1
 
+        method = forced_method or select_method(data, default_method)
+        method_counts[method] += 1
+        codec = Codec(method)
         plain = decrypt(data, codec)
         if reencrypt(plain, data, codec) != data:
             failures.append(path.relative_to(root))
@@ -123,6 +220,12 @@ def main():
 
     print(f"encrypted .TXT found : {encrypted}")
     print(f"plaintext .TXT skipped: {skipped}")
+    used = ", ".join(
+        f"{method.value}={count}"
+        for method, count in method_counts.items()
+        if count
+    )
+    print(f"files by cipher method: {used}")
     print(f"verification failures : {len(failures)}")
     for f in failures[:10]:
         print(f"  FAILED {f}")
