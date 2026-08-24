@@ -56,7 +56,11 @@ enum {
 int DethraceStreamlinePrepare(void);
 void* DethraceStreamlineGetInstanceProcAddr(void);
 void* DethraceStreamlineGetDeviceProcAddr(void* device, const char* name);
+int DethraceStreamlineCreateWin32Surface(void* instance, void* window, void* window_instance,
+    void** surface);
 int DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device);
+int DethraceStreamlineBeginFrame(void);
+void DethraceStreamlineEndSimulation(void);
 int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame);
 void DethraceStreamlineSetMarker(int marker);
 void DethraceStreamlineSetFrameGenerationActive(int active, uint32_t render_width,

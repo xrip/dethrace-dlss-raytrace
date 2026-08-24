@@ -3,6 +3,8 @@
 
 #include <SDL.h>
 
+typedef struct SDL_SysWMinfo SDL_SysWMinfo;
+
 #define FOREACH_SDL2_SYM(X)                                                             \
     X(Init, int, (Uint32))                                                              \
     X(Quit, void, (void))                                                               \
@@ -44,6 +46,7 @@
     X(Vulkan_GetInstanceExtensions, SDL_bool, (SDL_Window*, unsigned int*, const char**))\
     X(Vulkan_CreateSurface, SDL_bool, (SDL_Window*, VkInstance, VkSurfaceKHR*))          \
     X(Vulkan_GetDrawableSize, void, (SDL_Window*, int*, int*))                           \
+    X(GetWindowWMInfo, SDL_bool, (SDL_Window*, SDL_SysWMinfo*))                         \
     X(GetPrefPath, char*, (const char* org, const char* app))                           \
     X(free, void, (void*))
 

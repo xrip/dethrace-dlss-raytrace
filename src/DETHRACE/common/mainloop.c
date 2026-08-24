@@ -13,6 +13,7 @@
 #include "graphics.h"
 #include "harness/config.h"
 #include "harness/hooks.h"
+#include "harness/streamline_bridge.h"
 #include "harness/trace.h"
 #include "input.h"
 #include "main.h"
@@ -602,11 +603,13 @@ tRace_result MainGameLoop(void) {
     PrintMemoryDump(0, "ABOUT TO ENTER MAINLOOP");
 
     do {
+        DethraceStreamlineBeginFrame();
         frame_start_time = GetTotalTime();
         CyclePollKeys();
         CheckSystemKeys(1);
         NetReceiveAndProcessMessages();
         if (gHost_abandon_game || gProgram_state.prog_status == eProg_idling) {
+            DethraceStreamlineEndSimulation();
             break;
         }
         if (gNet_mode) {
@@ -673,6 +676,7 @@ tRace_result MainGameLoop(void) {
         ServiceGameInRace();
         EnterUserMessage();
         SkidsPerFrame();
+        DethraceStreamlineEndSimulation();
         if (!gWait_for_it) {
 #if defined(DETHRACE_FIX_BUGS)
             // Fixes issue where returning to race mode from the UI shows 2d elements in the wrong colors for half a second.

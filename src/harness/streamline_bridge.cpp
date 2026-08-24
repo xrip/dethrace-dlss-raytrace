@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 
 #define VK_NO_PROTOTYPES
+#define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 
 #include <sl.h>
@@ -10,6 +11,7 @@
 #include <sl_dlss.h>
 #include <sl_dlss_g.h>
 #include <sl_pcl.h>
+#include <sl_reflex.h>
 
 #include <windows.h>
 
@@ -34,6 +36,8 @@ using SlDLSSSetOptions = PFun_slDLSSSetOptions*;
 using SlDLSSGGetState = PFun_slDLSSGGetState*;
 using SlDLSSGSetOptions = PFun_slDLSSGSetOptions*;
 using SlPCLSetMarker = PFun_slPCLSetMarker*;
+using SlReflexSetOptions = PFun_slReflexSetOptions*;
+using SlReflexSleep = PFun_slReflexSleep*;
 
 struct State {
     HMODULE module = nullptr;
@@ -53,6 +57,8 @@ struct State {
     SlDLSSGGetState dlssg_get_state = nullptr;
     SlDLSSGSetOptions dlssg_set_options = nullptr;
     SlPCLSetMarker pcl_set_marker = nullptr;
+    SlReflexSetOptions reflex_set_options = nullptr;
+    SlReflexSleep reflex_sleep = nullptr;
     sl::FrameToken* frame_token = nullptr;
     sl::ViewportHandle viewport{0};
     bool prepared = false;
@@ -63,8 +69,14 @@ struct State {
     bool fg_options_set = false;
     bool fg_runtime_on = false;
     bool pcl_enabled = false;
+    bool reflex_enabled = false;
+    bool reflex_options_set = false;
+    bool frame_active = false;
+    bool simulation_active = false;
     bool first_frame_logged = false;
     bool feature_functions_checked = false;
+    uint32_t fg_present_calls = 0;
+    uint64_t fg_presented_frames = 0;
     uint32_t output_width = 0;
     uint32_t output_height = 0;
     uint32_t render_width = 0;
@@ -158,6 +170,31 @@ void load_feature_functions() {
 
     function = nullptr;
     if (g_state.fg_enabled) {
+        const sl::Result result = g_state.get_feature_function(sl::kFeatureReflex,
+            "slReflexSetOptions", function);
+        if (result == sl::Result::eOk)
+            g_state.reflex_set_options = reinterpret_cast<SlReflexSetOptions>(function);
+        else {
+            log_result("slReflexSetOptions capability", result);
+            g_state.fg_enabled = false;
+        }
+    }
+
+    function = nullptr;
+    if (g_state.fg_enabled) {
+        const sl::Result result = g_state.get_feature_function(sl::kFeatureReflex,
+            "slReflexSleep", function);
+        if (result == sl::Result::eOk) {
+            g_state.reflex_sleep = reinterpret_cast<SlReflexSleep>(function);
+            g_state.reflex_enabled = true;
+        } else {
+            log_result("slReflexSleep capability", result);
+            g_state.fg_enabled = false;
+        }
+    }
+
+    function = nullptr;
+    if (g_state.fg_enabled) {
         const sl::Result result = g_state.get_feature_function(sl::kFeaturePCL,
             "slPCLSetMarker", function);
         if (result == sl::Result::eOk) {
@@ -221,7 +258,24 @@ void set_constants(const dethrace_streamline_frame& frame) {
     log_result("slSetConstants", g_state.set_constants(constants, *g_state.frame_token, g_state.viewport));
 }
 
+bool configure_reflex() {
+    if (g_state.fg_enabled && g_state.reflex_set_options != nullptr
+        && !g_state.reflex_options_set) {
+        sl::ReflexOptions options{};
+        options.mode = sl::ReflexMode::eLowLatency;
+        const sl::Result result = g_state.reflex_set_options(options);
+        log_result("slReflexSetOptions", result);
+        g_state.reflex_options_set = result == sl::Result::eOk;
+        if (!g_state.reflex_options_set)
+            g_state.fg_enabled = false;
+    }
+
+    return g_state.fg_enabled && g_state.reflex_options_set;
+}
+
 void configure_options(const dethrace_streamline_frame& frame) {
+    configure_reflex();
+
     if (g_state.sr_enabled && g_state.dlss_set_options != nullptr
         && (!g_state.sr_options_set || g_state.output_width != frame.display_width
             || g_state.output_height != frame.display_height)) {
@@ -246,17 +300,39 @@ void configure_options(const dethrace_streamline_frame& frame) {
         sl::DLSSGOptions options{};
         options.mode = sl::DLSSGMode::eOn;
         options.numFramesToGenerate = 1;
-        options.numBackBuffers = 2;
-        options.mvecDepthWidth = frame.render_width;
-        options.mvecDepthHeight = frame.render_height;
-        options.colorWidth = frame.display_width;
-        options.colorHeight = frame.display_height;
-        options.enableUserInterfaceRecomposition = sl::Boolean::eTrue;
         log_result("slDLSSGSetOptions", g_state.dlssg_set_options(g_state.viewport, options));
         g_state.render_width = frame.render_width;
         g_state.render_height = frame.render_height;
         g_state.fg_options_set = true;
+        if (!g_state.fg_runtime_on) {
+            g_state.fg_present_calls = 0;
+            g_state.fg_presented_frames = 0;
+        }
         g_state.fg_runtime_on = true;
+    }
+}
+
+void query_dlssg_state(bool count_present) {
+    if (!g_state.fg_runtime_on || g_state.dlssg_get_state == nullptr)
+        return;
+
+    sl::DLSSGState state{};
+    const sl::Result result = g_state.dlssg_get_state(g_state.viewport, state, nullptr);
+    if (result != sl::Result::eOk) {
+        log_result("slDLSSGGetState", result);
+        return;
+    }
+    if (!count_present)
+        return;
+
+    g_state.fg_present_calls++;
+    g_state.fg_presented_frames += state.numFramesActuallyPresented;
+    if (g_state.fg_present_calls % 30 == 0) {
+        std::fprintf(stderr,
+            "STREAMLINE: DLSS-G state status=%u presented=%llu host-presents=%u max-generated=%u\n",
+            static_cast<unsigned>(state.status),
+            static_cast<unsigned long long>(g_state.fg_presented_frames),
+            g_state.fg_present_calls, state.numFramesToGenerateMax);
     }
 }
 
@@ -268,6 +344,13 @@ extern "C" int DethraceStreamlinePrepare(void) {
     g_state.prepared = true;
 
     if (!env_enabled("DETHRACE_STREAMLINE", true))
+        return 0;
+
+    choose_dlss_mode();
+    /* Do not install Streamline's Vulkan hooks unless a feature was requested. */
+    const bool want_sr = env_enabled("DETHRACE_DLSS", false);
+    const bool want_fg = env_enabled("DETHRACE_DLSSG", false);
+    if (!want_sr && !want_fg)
         return 0;
 
     const char* path = std::getenv("DETHRACE_STREAMLINE_PATH");
@@ -300,11 +383,6 @@ extern "C" int DethraceStreamlinePrepare(void) {
         return 0;
     }
 
-    choose_dlss_mode();
-    /* DLSS is opt-in. A plain Vulkan run must never load an asynchronous
-     * present hook just because Streamline DLLs happen to be next to the exe. */
-    const bool want_sr = env_enabled("DETHRACE_DLSS", false);
-    const bool want_fg = env_enabled("DETHRACE_DLSSG", false);
     sl::Feature features[4]{};
     uint32_t feature_count = 0;
     if (want_sr) features[feature_count++] = sl::kFeatureDLSS;
@@ -318,10 +396,15 @@ extern "C" int DethraceStreamlinePrepare(void) {
     preferences.renderAPI = sl::RenderAPI::eVulkan;
     preferences.engine = sl::EngineType::eCustom;
     preferences.engineVersion = "dethrace-vulkan";
+    const char* application_id = std::getenv("DETHRACE_STREAMLINE_APP_ID");
+    preferences.applicationId = application_id != nullptr && application_id[0] != '\0'
+        ? static_cast<uint32_t>(std::strtoul(application_id, nullptr, 10)) : 231313132u;
     const char* project_id = std::getenv("DETHRACE_STREAMLINE_PROJECT_ID");
-    preferences.projectId = project_id != nullptr && project_id[0] != '\0'
-        ? project_id : "a0f57b54-1daf-4934-90ae-c4035c19df04";
+    if (project_id != nullptr && project_id[0] != '\0')
+    preferences.projectId = project_id;
     preferences.logMessageCallback = streamline_log;
+    preferences.logLevel = env_enabled("DETHRACE_STREAMLINE_DEBUG", false)
+        ? sl::LogLevel::eVerbose : sl::LogLevel::eDefault;
     preferences.featuresToLoad = features;
     preferences.numFeaturesToLoad = feature_count;
     /* Keep the bundled SDK and plug-ins as one versioned set. The SDK default
@@ -361,6 +444,15 @@ extern "C" int DethraceStreamlinePrepare(void) {
         std::fprintf(stderr, "STREAMLINE: DLSS requirements result=%u\n",
             static_cast<unsigned>(requirements_result));
     }
+    if (g_state.get_feature_requirements != nullptr && want_fg) {
+        sl::FeatureRequirements requirements{};
+        const sl::Result requirements_result = g_state.get_feature_requirements(
+            sl::kFeatureDLSS_G, requirements);
+        log_result("slGetFeatureRequirements(DLSS-G)", requirements_result);
+        std::fprintf(stderr, "STREAMLINE: DLSS-G requirements result=%u flags=%u\n",
+            static_cast<unsigned>(requirements_result),
+            static_cast<unsigned>(requirements.flags));
+    }
 
     g_state.sr_enabled = want_sr;
     g_state.fg_enabled = want_fg;
@@ -383,6 +475,30 @@ extern "C" void* DethraceStreamlineGetDeviceProcAddr(void* device, const char* n
         reinterpret_cast<VkDevice>(device), name)));
 }
 
+extern "C" int DethraceStreamlineCreateWin32Surface(void* instance, void* window,
+    void* window_instance, void** surface) {
+    if (!g_state.initialized || instance == nullptr || window == nullptr
+        || window_instance == nullptr || surface == nullptr)
+        return 0;
+    /* This entry point is intentionally not returned by Streamline's
+     * vkGetInstanceProcAddr. NVIDIA's Vulkan sample calls the interposer export
+     * directly so its surface-to-HWND hook can record the window. */
+    const auto create_surface = load_symbol<PFN_vkCreateWin32SurfaceKHR>(
+        "vkCreateWin32SurfaceKHR");
+    if (create_surface == nullptr)
+        return 0;
+
+    VkWin32SurfaceCreateInfoKHR info{};
+    info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+    info.hinstance = reinterpret_cast<HINSTANCE>(window_instance);
+    info.hwnd = reinterpret_cast<HWND>(window);
+    VkSurfaceKHR vk_surface = VK_NULL_HANDLE;
+    if (create_surface(reinterpret_cast<VkInstance>(instance), &info, nullptr, &vk_surface) != VK_SUCCESS)
+        return 0;
+    *surface = reinterpret_cast<void*>(vk_surface);
+    return 1;
+}
+
 extern "C" int DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device) {
     if (!g_state.initialized || g_state.is_feature_supported == nullptr)
         return 0;
@@ -395,37 +511,78 @@ extern "C" int DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device) 
             g_state.sr_enabled = false;
     }
     if (g_state.fg_enabled) {
-        const sl::Result result = g_state.is_feature_supported(sl::kFeatureDLSS_G, adapter);
-        log_result("slIsFeatureSupported(DLSS-G)", result);
-        if (result != sl::Result::eOk)
+        const sl::Result reflex_result = g_state.is_feature_supported(sl::kFeatureReflex, adapter);
+        log_result("slIsFeatureSupported(Reflex)", reflex_result);
+        const sl::Result pcl_result = g_state.is_feature_supported(sl::kFeaturePCL, adapter);
+        log_result("slIsFeatureSupported(PCL)", pcl_result);
+        const sl::Result fg_result = g_state.is_feature_supported(sl::kFeatureDLSS_G, adapter);
+        log_result("slIsFeatureSupported(DLSS-G)", fg_result);
+        if (reflex_result != sl::Result::eOk || pcl_result != sl::Result::eOk
+            || fg_result != sl::Result::eOk)
             g_state.fg_enabled = false;
     }
     load_feature_functions();
     return (g_state.sr_enabled || g_state.fg_enabled) ? 1 : 0;
 }
 
+extern "C" int DethraceStreamlineBeginFrame(void) {
+    if (!g_state.initialized || !g_state.fg_enabled)
+        return 0;
+
+    load_feature_functions();
+    query_dlssg_state(true);
+    if (!configure_reflex()
+        || g_state.get_new_frame_token(g_state.frame_token, nullptr) != sl::Result::eOk
+        || g_state.frame_token == nullptr)
+        return 0;
+
+    g_state.frame_active = true;
+    log_result("slReflexSleep", g_state.reflex_sleep(*g_state.frame_token));
+    log_result("slPCLSetMarker(SimulationStart)",
+        g_state.pcl_set_marker(sl::PCLMarker::eSimulationStart, *g_state.frame_token));
+    g_state.simulation_active = true;
+    return 1;
+}
+
+extern "C" void DethraceStreamlineEndSimulation(void) {
+    if (!g_state.simulation_active || g_state.frame_token == nullptr)
+        return;
+    log_result("slPCLSetMarker(SimulationEnd)",
+        g_state.pcl_set_marker(sl::PCLMarker::eSimulationEnd, *g_state.frame_token));
+    g_state.simulation_active = false;
+}
+
 extern "C" int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame) {
     if (!g_state.initialized || frame == nullptr || frame->command_buffer == nullptr)
         return 0;
 
-    const uint32_t frame_index = static_cast<uint32_t>(frame->frame_index);
-    if (g_state.get_new_frame_token(g_state.frame_token, &frame_index) != sl::Result::eOk
-        || g_state.frame_token == nullptr)
-        return 0;
-
     load_feature_functions();
+    if (!g_state.frame_active) {
+        const uint32_t frame_index = static_cast<uint32_t>(frame->frame_index);
+        if (g_state.get_new_frame_token(g_state.frame_token, &frame_index) != sl::Result::eOk
+            || g_state.frame_token == nullptr)
+            return 0;
+        g_state.frame_active = true;
+        if (configure_reflex()) {
+            log_result("slReflexSleep", g_state.reflex_sleep(*g_state.frame_token));
+            log_result("slPCLSetMarker(SimulationStart fallback)",
+                g_state.pcl_set_marker(sl::PCLMarker::eSimulationStart, *g_state.frame_token));
+            log_result("slPCLSetMarker(SimulationEnd fallback)",
+                g_state.pcl_set_marker(sl::PCLMarker::eSimulationEnd, *g_state.frame_token));
+        }
+    }
     configure_options(*frame);
     set_constants(*frame);
 
-    sl::Resource hudless = make_resource(frame->hudless_color);
     sl::Resource input = make_resource(frame->scaling_input_color);
     sl::Resource output = make_resource(frame->scaling_output_color);
+    sl::Resource hudless = g_state.sr_enabled ? output : make_resource(frame->hudless_color);
     sl::Resource depth = make_resource(frame->depth);
     sl::Resource motion = make_resource(frame->motion);
     sl::Resource ui = make_resource(frame->ui_color);
     sl::Extent render_extent{0, 0, frame->render_width, frame->render_height};
     sl::Extent display_extent{0, 0, frame->display_width, frame->display_height};
-    sl::ResourceTag tags[7]{};
+    sl::ResourceTag tags[6]{};
     uint32_t tag_count = 0;
     if (g_state.sr_enabled)
         tags[tag_count++] = sl::ResourceTag(&input, sl::kBufferTypeScalingInputColor,
@@ -437,16 +594,16 @@ extern "C" int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame
         sl::ResourceLifecycle::eValidUntilPresent, &render_extent);
     tags[tag_count++] = sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors,
         sl::ResourceLifecycle::eValidUntilPresent, &render_extent);
-    if (g_state.fg_enabled) {
+    const bool valid_hudless = hudless.width == frame->display_width
+        && hudless.height == frame->display_height;
+    if (g_state.fg_enabled && valid_hudless)
         tags[tag_count++] = sl::ResourceTag(&hudless, sl::kBufferTypeHUDLessColor,
             sl::ResourceLifecycle::eValidUntilPresent, &display_extent);
+    const bool valid_ui = frame->ui_color.width == frame->display_width
+        && frame->ui_color.height == frame->display_height;
+    if (g_state.fg_enabled && valid_hudless && valid_ui) {
         tags[tag_count++] = sl::ResourceTag(&ui, sl::kBufferTypeUIColorAndAlpha,
             sl::ResourceLifecycle::eValidUntilPresent, &display_extent);
-        /* Pass the full display extent without claiming ownership of the
-         * host image. This keeps Streamline's intercepted backbuffer extent
-         * explicit while its Vulkan interposer owns the actual resource. */
-        tags[tag_count++] = sl::ResourceTag(nullptr, sl::kBufferTypeBackbuffer,
-            sl::ResourceLifecycle{}, &display_extent);
     }
 
     sl::CommandBuffer* command_buffer = reinterpret_cast<sl::CommandBuffer*>(frame->command_buffer);
@@ -470,9 +627,10 @@ extern "C" int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame
     if (g_state.fg_enabled && (!g_state.sr_enabled || (result_mask & DETHRACE_STREAMLINE_SR) != 0))
         result_mask |= DETHRACE_STREAMLINE_FG;
     if (!g_state.first_frame_logged) {
-        std::fprintf(stderr, "STREAMLINE: frame contract SR=%s FG=%s PCL=%s mask=%d\n",
+        std::fprintf(stderr, "STREAMLINE: frame contract SR=%s FG=%s Reflex=%s PCL=%s mask=%d\n",
             g_state.sr_enabled ? "on" : "off", g_state.fg_enabled ? "on" : "off",
-            g_state.pcl_enabled ? "on" : "off", result_mask);
+            g_state.reflex_enabled ? "on" : "off", g_state.pcl_enabled ? "on" : "off",
+            result_mask);
         g_state.first_frame_logged = true;
     }
     return result_mask;
@@ -491,6 +649,11 @@ extern "C" void DethraceStreamlineSetMarker(int marker) {
     default: return;
     }
     log_result("slPCLSetMarker", g_state.pcl_set_marker(pcl_marker, *g_state.frame_token));
+    if (marker == 5) {
+        g_state.frame_active = false;
+        g_state.simulation_active = false;
+        g_state.frame_token = nullptr;
+    }
 }
 
 extern "C" void DethraceStreamlineSetFrameGenerationActive(int active,
@@ -509,14 +672,10 @@ extern "C" void DethraceStreamlineSetFrameGenerationActive(int active,
     sl::DLSSGOptions options{};
     options.mode = active ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
     options.numFramesToGenerate = 1;
-    options.numBackBuffers = 2;
-    options.mvecDepthWidth = g_state.render_width;
-    options.mvecDepthHeight = g_state.render_height;
-    options.colorWidth = g_state.output_width;
-    options.colorHeight = g_state.output_height;
-    options.enableUserInterfaceRecomposition = sl::Boolean::eTrue;
     log_result("slDLSSGSetOptions(frame active)", g_state.dlssg_set_options(g_state.viewport, options));
     g_state.fg_runtime_on = active != 0;
+    if (g_state.fg_runtime_on)
+        query_dlssg_state(false);
 }
 
 extern "C" void DethraceStreamlineShutdown(void) {
@@ -535,7 +694,10 @@ extern "C" void DethraceStreamlineShutdown(void) {
 extern "C" int DethraceStreamlinePrepare(void) { return 0; }
 extern "C" void* DethraceStreamlineGetInstanceProcAddr(void) { return nullptr; }
 extern "C" void* DethraceStreamlineGetDeviceProcAddr(void*, const char*) { return nullptr; }
+extern "C" int DethraceStreamlineCreateWin32Surface(void*, void*, void*, void**) { return 0; }
 extern "C" int DethraceStreamlineSetVulkanPhysicalDevice(void*) { return 0; }
+extern "C" int DethraceStreamlineBeginFrame(void) { return 0; }
+extern "C" void DethraceStreamlineEndSimulation(void) {}
 extern "C" int DethraceStreamlineEvaluate(const dethrace_streamline_frame*) { return 0; }
 extern "C" void DethraceStreamlineSetMarker(int) {}
 extern "C" void DethraceStreamlineSetFrameGenerationActive(int, uint32_t, uint32_t,

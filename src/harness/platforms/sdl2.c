@@ -1,4 +1,9 @@
 #include <SDL.h>
+#ifdef _WIN32
+#include <SDL_syswm.h>
+#undef CreateWindow
+#undef MAX_PATH
+#endif
 #include <SDL_vulkan.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -484,6 +489,18 @@ static int SDL2_Harness_Vulkan_CreateSurface(void* instance, void** surface) {
     // pull in vulkan_core.h, so that macro is not available here.
     VkSurfaceKHR s = 0;
 
+#ifdef _WIN32
+    if (DethraceStreamlinePrepare()) {
+        SDL_SysWMinfo info;
+        SDL_VERSION(&info.version);
+        if (SDL2_GetWindowWMInfo(window, &info) != SDL_TRUE) {
+            LOG_WARN2("SDL_GetWindowWMInfo failed: %s", SDL2_GetError());
+            return 0;
+        }
+        return DethraceStreamlineCreateWin32Surface(instance, info.info.win.window,
+            info.info.win.hinstance, surface);
+    }
+#endif
     if (SDL2_Vulkan_CreateSurface(window, (VkInstance)instance, &s) != SDL_TRUE) {
         LOG_WARN2("SDL_Vulkan_CreateSurface failed: %s", SDL2_GetError());
         return 0;
