@@ -154,7 +154,8 @@ Work in this order. These are direct integration faults, not image-quality tunin
 7. **Validation is off under Streamline.** This is a known limit caused by its virtual swapchain resources. Always keep a separate plain Vulkan validation run.
 8. **No runtime settings UI.** DLSS and FG are environment-only. The planned INI/CLI controls and safe live toggle do not exist.
 9. **Stage 4 and visual proof remain open.** Add the motion debug view, then save HD A/B frames and check smoke, sparks, mirror, map, fog, translucency, moving-car trails, and HUD stability.
-10. **Jitter scale has a small oddity.** `set_scene_jitter` computes `width = render_area.extent.width * scale + 0.5f`, where `scale` is `render_scale` again even though `render_area` is already the scene extent. With `render_scale` at 1.0 this only costs a 640 vs 640.5 rounding difference, but it would be wrong at any other render scale.
+10. **World-anchored 2D markers are not re-projected.** The 2D layer holds both the HUD and markers placed from world positions (damage and cop indicators). The scene is now wider than the 4:3 UI box, so those markers sit in the wrong place. Agreed as follow-up work, deliberately not addressed when widescreen landed.
+11. **DLSS mode must be matched to the upscale ratio by hand.** Nothing checks that `DETHRACE_DLSS_MODE` agrees with scene-to-display ratio. A large mismatch, such as a 640x480 scene at 1920x1080 output on `quality`, gives a black frame with no error: `slEvaluateFeature` still returns `eOk`, so the renderer blits an untouched scaling output. Either derive the mode from the ratio or query `slDLSSGetOptimalSettings`.
 
 ### Corrections to earlier handoff text
 
@@ -220,6 +221,22 @@ $env:DETHRACE_STREAMLINE_DEBUG = "0"
   --window-width=1280 --window-height=720 --quick-race=0 --fps=30 `
   -nosound -nocutscenes
 ```
+
+Widescreen scene, 960x540 upscaled to 1920x1080 by a whole factor of 2:
+
+```powershell
+$env:DETHRACE_ROOT_DIR = "$PWD\Carma"
+$env:DETHRACE_VULKAN_SCENE_SIZE = "960x540"
+$env:DETHRACE_STREAMLINE = "1"
+$env:DETHRACE_DLSS = "1"
+$env:DETHRACE_DLSSG = "1"
+$env:DETHRACE_DLSS_MODE = "performance"
+.\cmake-build-streamline\dethrace.exe --vulkan --window `
+  --window-width=1920 --window-height=1080 --quick-race=0 --fps=30 `
+  -nosound -nocutscenes
+```
+
+`DETHRACE_VULKAN_SCENE_SIZE` decouples the 3D scene from the game's 640x480 screen. The scene aspect also becomes the forward cameras' aspect, giving Hor+ widescreen, and the 2D layer is centred at its own 4:3 shape rather than stretched. Match `DETHRACE_DLSS_MODE` to the ratio: 2x is `performance`, 3x is `ultra-performance`, 1.5x is `quality`. A ratio far from the chosen mode is what produced a black frame at 1920x1080 from a 640x480 scene.
 
 Useful bridge controls:
 
