@@ -4,7 +4,8 @@
 
 - Repository: `C:\Users\xr1p\CLionProjects\dethrace-vulkan`
 - Branch: `feature/vulkan-renderer`
-- BRender submodule commit: `5b23b62` (`fix(vkrend): make DLSS-G interpolate and stop the jitter shake`).
+- BRender submodule commit: `797f3d0` (`feat(vkrend): filter opaque textures instead of point sampling them`).
+- The Vulkan path now also has a widescreen scene mode, filtered opaque textures, and a save-driven quick race. See the fixed/known-issue lists below.
 - DLSS Super Resolution runs. **DLSS Frame Generation now makes real generated frames**: 1372 presented for 690 host presents on an RTX 5060 Ti, driver 610.88, 640x480 scene at 1280x720. That is a clean 2x and it repeats across runs.
 - Stage 6's first hard gate (`presented > host-presents`) is met. Stage 5 and Stage 6 are still **not** complete: no saved HD A/B images, no ghosting check, no FPS/latency table, no INI or command-line settings.
 
@@ -154,13 +155,16 @@ Work in this order. These are direct integration faults, not image-quality tunin
 7. **Validation is off under Streamline.** This is a known limit caused by its virtual swapchain resources. Always keep a separate plain Vulkan validation run.
 8. **No runtime settings UI.** DLSS and FG are environment-only. The planned INI/CLI controls and safe live toggle do not exist.
 9. **Stage 4 and visual proof remain open.** Add the motion debug view, then save HD A/B frames and check smoke, sparks, mirror, map, fog, translucency, moving-car trails, and HUD stability.
-10. **World-anchored 2D markers are not re-projected.** The 2D layer holds both the HUD and markers placed from world positions (damage and cop indicators). The scene is now wider than the 4:3 UI box, so those markers sit in the wrong place. Agreed as follow-up work, deliberately not addressed when widescreen landed.
-11. **DLSS mode must be matched to the upscale ratio by hand.** Nothing checks that `DETHRACE_DLSS_MODE` agrees with scene-to-display ratio. A large mismatch, such as a 640x480 scene at 1920x1080 output on `quality`, gives a black frame with no error: `slEvaluateFeature` still returns `eOk`, so the renderer blits an untouched scaling output. Either derive the mode from the ratio or query `slDLSSGetOptimalSettings`.
+10. **Colour-key transparency blocks filtering on sprites.** Transparency is "RGB is black" (`textured_model.frag`), not an alpha channel, so colour-keyed draws cannot be linearly filtered without a dark halo appearing at every sprite edge and mip levels averaging the key in. They are point sampled as a result. The fix is to build a real alpha channel in `upload_texture` -- index 0 to `alpha = 0`, with RGB bled from neighbouring texels so interpolation never pulls black in -- and alpha-test at 0.5 in the shader. Everything could then filter, sprites included.
+11. **World-anchored 2D markers are not re-projected.** The 2D layer holds both the HUD and markers placed from world positions (damage and cop indicators). The scene is now wider than the 4:3 UI box, so those markers sit in the wrong place. Agreed as follow-up work, deliberately not addressed when widescreen landed.
+12. **DLSS mode must be matched to the upscale ratio by hand.** Nothing checks that `DETHRACE_DLSS_MODE` agrees with scene-to-display ratio. A large mismatch, such as a 640x480 scene at 1920x1080 output on `quality`, gives a black frame with no error: `slEvaluateFeature` still returns `eOk`, so the renderer blits an untouched scaling output. Either derive the mode from the ratio or query `slDLSSGetOptimalSettings`.
 
 ### Fixed since the last handoff
 
 - **Every pedestrian wore the same sprite** and switched to it as soon as its animation advanced. An ordered draw is queued while the model is walked and flushed only after every model has been walked, but `StoredVkRenderGroup` read the material from `vk_group_info`, which lives on the geometry rather than the draw. Carmageddon gives every pedestrian the same `br_material` and swaps its colour map per pedestrian, so by flush time that one stored state held only the last pedestrian's sprite. The queued primitive now folds the resolved material into the state snapshot it already takes, and the state each draw should use is passed explicitly. Fixed in BRender `1322d89`.
   - Worth knowing: reading `renderer->state.current` unconditionally instead **crashes**. For geometry with no material it picks up whatever colour map the current state holds, which can outlive the `br_buffer_stored` it names.
+- **Opaque textures are now filtered.** The game never asks for filtering, so every surface used to be point sampled at mip 0 and the mip chain built on upload was never read. Vulkan now uses linear, full mips and max anisotropy for opaque draws. Beyond sharpness this removes distant shimmer, which was temporal noise DLSS could not settle. `--vulkan` deliberately no longer matches the software and OpenGL look. Fixed in BRender `797f3d0`.
+  - Colour-keyed draws stay point sampled, and must until the key becomes a real alpha channel. See the open item below.
 - **Descriptor set leak, still open.** Texture descriptor sets come from a 16384-set pool created with `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT`, but `vkFreeDescriptorSets` is called nowhere in the driver. Every texture resize orphans up to four sets permanently. When the pool runs dry `BufferStoredVkBind` fails and `gstored.c` skips the draw, so the symptom is pedestrians vanishing rather than drawing wrong. Not yet hit in a normal session, but it is a real leak.
 
 ### Corrections to earlier handoff text
