@@ -157,6 +157,12 @@ Work in this order. These are direct integration faults, not image-quality tunin
 10. **World-anchored 2D markers are not re-projected.** The 2D layer holds both the HUD and markers placed from world positions (damage and cop indicators). The scene is now wider than the 4:3 UI box, so those markers sit in the wrong place. Agreed as follow-up work, deliberately not addressed when widescreen landed.
 11. **DLSS mode must be matched to the upscale ratio by hand.** Nothing checks that `DETHRACE_DLSS_MODE` agrees with scene-to-display ratio. A large mismatch, such as a 640x480 scene at 1920x1080 output on `quality`, gives a black frame with no error: `slEvaluateFeature` still returns `eOk`, so the renderer blits an untouched scaling output. Either derive the mode from the ratio or query `slDLSSGetOptimalSettings`.
 
+### Fixed since the last handoff
+
+- **Every pedestrian wore the same sprite** and switched to it as soon as its animation advanced. An ordered draw is queued while the model is walked and flushed only after every model has been walked, but `StoredVkRenderGroup` read the material from `vk_group_info`, which lives on the geometry rather than the draw. Carmageddon gives every pedestrian the same `br_material` and swaps its colour map per pedestrian, so by flush time that one stored state held only the last pedestrian's sprite. The queued primitive now folds the resolved material into the state snapshot it already takes, and the state each draw should use is passed explicitly. Fixed in BRender `1322d89`.
+  - Worth knowing: reading `renderer->state.current` unconditionally instead **crashes**. For geometry with no material it picks up whatever colour map the current state holds, which can outlive the `br_buffer_stored` it names.
+- **Descriptor set leak, still open.** Texture descriptor sets come from a 16384-set pool created with `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT`, but `vkFreeDescriptorSets` is called nowhere in the driver. Every texture resize orphans up to four sets permanently. When the pool runs dry `BufferStoredVkBind` fails and `gstored.c` skips the draw, so the symptom is pedestrians vanishing rather than drawing wrong. Not yet hit in a normal session, but it is a real leak.
+
 ### Corrections to earlier handoff text
 
 Two items in the previous list were wrong and have been dropped:
@@ -197,6 +203,8 @@ The SDK and copied DLLs are local build inputs. They are not tracked by this rep
 ## Run and check
 
 Game data is in the untracked `Carma/` directory.
+
+`--quick-race-save[=slot]` restores a saved career before the race starts, so a test run gets the upgraded car, credits, power-ups and opponents instead of the stock first car. It is enough on its own; without an explicit `--quick-race` the race comes from the save. Only slot 0 loads with the shipped data, because `LoadSavedGames()` rejects any file whose size is not `sizeof(tSave_game)` (948 bytes) and `SAVE1`..`SAVE9` are 1464.
 
 Plain Vulkan fallback:
 
