@@ -25,7 +25,7 @@ root.
 |---|---|---|---|
 | OpenGL | `--opengl` | `glrend` | Full 3D. The reference implementation and the A/B baseline. |
 | Software | `--software` | `softrend` + `virtualframebuffer` | Full 3D on CPU. |
-| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 3 stored-model parity is implemented; split targets and motion/depth prerequisites are ready for Stage 4.** |
+| **Vulkan** | `--vulkan` | **`vkrend`** | **Stage 3 stored-model parity is implemented; Stage 4 resources and the opt-in Streamline bridge are present, with a plain Vulkan fallback when DLSS is unsupported.** |
 
 Note `opengl_3dfx_mode` defaults to `1` in this tree, so omitting `--opengl` does *not*
 select the software renderer — that is what `--software` is for.
@@ -428,7 +428,7 @@ Three things in that harness are load-bearing and documented in `tools/GameInput
 
 | Check | Result |
 |---|---|
-| Release build | **pass**, current (`ninja: no work to do`) |
+| Streamline build | **pass**, `cmake-build-streamline --target dethrace` |
 | Release CTest | no tests registered in this build directory |
 | `--vulkan` nine-view runtime | **pass**, distinct textured frames, exit 0, no Vulkan/runtime failures |
 | Vulkan deformation | **pass**, bodywork message + visibly deformed mesh, 34.9% car-area delta, exit 0 |
@@ -446,8 +446,11 @@ Three things in that harness are load-bearing and documented in `tools/GameInput
 
 **Current objective:** Stage 3's requested smoke, tyre smoke, skid, and spark visuals remain
 explicitly deferred. Stage 4 now has split render/display targets, sampleable depth, explicit
-DLSS layer ownership, actor-keyed motion vectors, and an 8-sample Halton jitter path. The next
-step is Streamline capability checks; the SDK is not present yet.
+DLSS layer ownership, actor-keyed motion vectors, an 8-sample Halton jitter path, valid camera
+vectors/FOV, and current-to-previous clip matrices. The Stage 5 bridge loads Streamline 2.12
+through the Vulkan interposer, sends PCL render/present markers, and turns DLSS-G off for menu
+frames. DLSS is opt-in through `DETHRACE_DLSS=1` / `DETHRACE_DLSSG=1`; unsupported NGX or feature
+functions return to the normal Vulkan path.
 
 Ordered by priority:
 
@@ -467,12 +470,14 @@ Ordered by priority:
      for OpenGL, and it applies to Vulkan via `opengl_3dfx_mode`. Matching `glrend` alone is
      not sufficient — check against the software reference too.
    * **Stage 3 is a shippable release** in its own right. Tag it.
-4. **Stage 4 — DLSS prerequisites.** `DETHRACE_VULKAN_RENDER_SCALE` now exercises split scene
-   and display targets, depth and motion are sampleable, and the four image layers are exposed.
-   Halton jitter now affects only the render projection; next: Streamline capability checks.
-5. **Stages 5–6 — DLSS SDK integration.** Keep a clean fallback when Streamline/DLSS is absent;
-   current Streamline documentation keeps Dynamic Multi Frame Generation on D3D12, so do not
-   promise that mode on Vulkan.
+4. **Stage 4 — DLSS prerequisites.** `DETHRACE_VULKAN_RENDER_SCALE` exercises split scene and
+   display targets, depth and motion are sampleable, and the four image layers are exposed.
+   Halton jitter affects only the render projection; camera constants and temporal matrices are
+   now passed to Streamline.
+5. **Stage 5 — Streamline SDK integration.** The bridge is present and capability-gated, but this
+   local RTX 5060 Ti test image reports NGX/DLSS unsupported, so a real DLSS SR/Quality and
+   classic Vulkan 2x FG capture remains open. SDK 2.12 also reports command-hook limitations;
+   do not mark image-quality acceptance complete until a supported NGX runtime is available.
 
 ---
 
@@ -497,9 +502,8 @@ Ordered by priority:
 
 ## 9. Repository state
 
-The Stage 2/3 continuation is uncommitted in the root worktree and the BRender submodule.
-Do not discard it. `Carma/`, the local SDL tree, build folders, and captures remain local
-support data.
+The tracked Vulkan/Streamline work is committed in the root worktree and the BRender
+submodule. `Carma/`, the local SDL tree, build folders, and captures remain local support data.
 
 Intentionally **not** committed (all gitignored):
 

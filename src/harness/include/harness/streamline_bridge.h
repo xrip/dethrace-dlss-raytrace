@@ -36,6 +36,11 @@ typedef struct dethrace_streamline_frame {
     const float* clip_to_camera_view;
     const float* clip_to_prev_clip;
     const float* prev_clip_to_clip;
+    const float* camera_pos;
+    const float* camera_up;
+    const float* camera_right;
+    const float* camera_fwd;
+    float camera_fov;
     float jitter_x;
     float jitter_y;
     float motion_scale_x;
@@ -51,8 +56,11 @@ enum {
 int DethraceStreamlinePrepare(void);
 void* DethraceStreamlineGetInstanceProcAddr(void);
 void* DethraceStreamlineGetDeviceProcAddr(void* device, const char* name);
-void DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device);
+int DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device);
 int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame);
+void DethraceStreamlineSetMarker(int marker);
+void DethraceStreamlineSetFrameGenerationActive(int active, uint32_t render_width,
+    uint32_t render_height, uint32_t display_width, uint32_t display_height);
 void DethraceStreamlineShutdown(void);
 
 #ifdef __cplusplus
