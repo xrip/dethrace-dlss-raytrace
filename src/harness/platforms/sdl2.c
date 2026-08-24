@@ -11,6 +11,7 @@
 #include "harness.h"
 #include "harness/config.h"
 #include "harness/hooks.h"
+#include "harness/render_config.h"
 #include "harness/streamline_bridge.h"
 #include "harness/trace.h"
 #include "sdl2_scancode_map.h"
@@ -413,6 +414,10 @@ static void SDL2_Harness_Swap(br_pixelmap* back_buffer) {
     br_uint_32* dest_pixels;
 
     SDL2_Harness_ProcessWindowMessages();
+
+    /* The game rewrites the forward camera aspect on every view change, so a
+     * widescreen scene has to reassert it each frame rather than at setup. */
+    HarnessRenderApplyCameraAspect();
 
     if (using_vulkan) {
         // vkrend already presented via vkQueuePresentKHR.
