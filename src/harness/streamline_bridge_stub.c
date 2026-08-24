@@ -18,14 +18,6 @@ void DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device) {
     (void)physical_device;
 }
 
-void DethraceStreamlineSetVulkanInfo(void* instance, void* physical_device, void* device,
-    uint32_t queue_family) {
-    (void)instance;
-    (void)physical_device;
-    (void)device;
-    (void)queue_family;
-}
-
 int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame) {
     (void)frame;
     return 0;

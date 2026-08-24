@@ -52,8 +52,6 @@ int DethraceStreamlinePrepare(void);
 void* DethraceStreamlineGetInstanceProcAddr(void);
 void* DethraceStreamlineGetDeviceProcAddr(void* device, const char* name);
 void DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device);
-void DethraceStreamlineSetVulkanInfo(void* instance, void* physical_device, void* device,
-    uint32_t queue_family);
 int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame);
 void DethraceStreamlineShutdown(void);
 

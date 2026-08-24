@@ -28,7 +28,6 @@ using SlGetFeatureFunction = PFun_slGetFeatureFunction*;
 using SlIsFeatureSupported = PFun_slIsFeatureSupported*;
 using SlIsFeatureLoaded = PFun_slIsFeatureLoaded*;
 using SlGetFeatureRequirements = PFun_slGetFeatureRequirements*;
-using SlSetVulkanInfo = PFun_slSetVulkanInfo*;
 using SlGetDeviceProcAddr = PFN_vkGetDeviceProcAddr;
 using SlDLSSSetOptions = PFun_slDLSSSetOptions*;
 using SlDLSSGGetState = PFun_slDLSSGGetState*;
@@ -48,7 +47,6 @@ struct State {
     SlIsFeatureSupported is_feature_supported = nullptr;
     SlIsFeatureLoaded is_feature_loaded = nullptr;
     SlGetFeatureRequirements get_feature_requirements = nullptr;
-    SlSetVulkanInfo set_vulkan_info = nullptr;
     SlDLSSSetOptions dlss_set_options = nullptr;
     SlDLSSGGetState dlssg_get_state = nullptr;
     SlDLSSGSetOptions dlssg_set_options = nullptr;
@@ -60,6 +58,7 @@ struct State {
     bool fg_enabled = false;
     bool sr_options_set = false;
     bool fg_options_set = false;
+    bool feature_functions_checked = false;
     uint32_t output_width = 0;
     uint32_t output_height = 0;
     uint32_t render_width = 0;
@@ -80,6 +79,18 @@ void log_result(const char* operation, sl::Result result) {
     if (result != sl::Result::eOk)
         std::fprintf(stderr, "STREAMLINE: %s failed (%u)\n", operation,
             static_cast<unsigned>(result));
+}
+
+void streamline_log(sl::LogType type, const char* message) {
+    if (type == sl::LogType::eInfo) {
+        const char* debug = std::getenv("DETHRACE_STREAMLINE_DEBUG");
+        if (debug == nullptr || (debug[0] != '1' && debug[0] != 'y' && debug[0] != 'Y'))
+            return;
+    }
+    const char* level = type == sl::LogType::eError ? "error"
+        : (type == sl::LogType::eWarn ? "warn" : "info");
+    std::fprintf(stderr, "STREAMLINE: [sdk:%s] %s\n", level,
+        message != nullptr ? message : "");
 }
 
 bool env_enabled(const char* name, bool default_value) {
@@ -106,8 +117,9 @@ void choose_dlss_mode() {
 }
 
 void load_feature_functions() {
-    if (g_state.get_feature_function == nullptr)
+    if (g_state.get_feature_function == nullptr || g_state.feature_functions_checked)
         return;
+    g_state.feature_functions_checked = true;
 
     void* function = nullptr;
     if (g_state.sr_enabled) {
@@ -117,6 +129,7 @@ void load_feature_functions() {
             g_state.dlss_set_options = reinterpret_cast<SlDLSSSetOptions>(function);
         else {
             log_result("slDLSSSetOptions capability", result);
+            g_state.sr_enabled = false;
         }
     }
 
@@ -125,7 +138,6 @@ void load_feature_functions() {
         && g_state.get_feature_function(sl::kFeatureDLSS_G, "slDLSSGGetState", function) == sl::Result::eOk)
         g_state.dlssg_get_state = reinterpret_cast<SlDLSSGGetState>(function);
 
-    function = nullptr;
     function = nullptr;
     if (g_state.fg_enabled) {
         const sl::Result result = g_state.get_feature_function(sl::kFeatureDLSS_G,
@@ -246,7 +258,6 @@ extern "C" int DethraceStreamlinePrepare(void) {
     g_state.is_feature_supported = load_symbol<SlIsFeatureSupported>("slIsFeatureSupported");
     g_state.is_feature_loaded = load_symbol<SlIsFeatureLoaded>("slIsFeatureLoaded");
     g_state.get_feature_requirements = load_symbol<SlGetFeatureRequirements>("slGetFeatureRequirements");
-    g_state.set_vulkan_info = load_symbol<SlSetVulkanInfo>("slSetVulkanInfo");
     if (g_state.get_instance_proc_addr == nullptr || g_state.get_device_proc_addr == nullptr
         || g_state.init == nullptr
         || g_state.shutdown == nullptr || g_state.set_tag_for_frame == nullptr
@@ -261,15 +272,22 @@ extern "C" int DethraceStreamlinePrepare(void) {
     choose_dlss_mode();
     const bool want_sr = env_enabled("DETHRACE_DLSS", true);
     const bool want_fg = env_enabled("DETHRACE_DLSSG", true);
-    sl::Feature features[2]{};
+    sl::Feature features[3]{};
     uint32_t feature_count = 0;
     if (want_sr) features[feature_count++] = sl::kFeatureDLSS;
-    if (want_fg) features[feature_count++] = sl::kFeatureDLSS_G;
+    if (want_fg) {
+        features[feature_count++] = sl::kFeatureReflex;
+        features[feature_count++] = sl::kFeatureDLSS_G;
+    }
 
     sl::Preferences preferences{};
     preferences.renderAPI = sl::RenderAPI::eVulkan;
     preferences.engine = sl::EngineType::eCustom;
     preferences.engineVersion = "dethrace-vulkan";
+    const char* project_id = std::getenv("DETHRACE_STREAMLINE_PROJECT_ID");
+    preferences.projectId = project_id != nullptr && project_id[0] != '\0'
+        ? project_id : "a0f57b54-1daf-4934-90ae-c4035c19df04";
+    preferences.logMessageCallback = streamline_log;
     preferences.featuresToLoad = features;
     preferences.numFeaturesToLoad = feature_count;
     preferences.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
@@ -300,8 +318,11 @@ extern "C" int DethraceStreamlinePrepare(void) {
     }
     if (g_state.get_feature_requirements != nullptr && want_sr) {
         sl::FeatureRequirements requirements{};
-        log_result("slGetFeatureRequirements(DLSS)",
-            g_state.get_feature_requirements(sl::kFeatureDLSS, requirements));
+        const sl::Result requirements_result = g_state.get_feature_requirements(
+            sl::kFeatureDLSS, requirements);
+        log_result("slGetFeatureRequirements(DLSS)", requirements_result);
+        std::fprintf(stderr, "STREAMLINE: DLSS requirements result=%u\n",
+            static_cast<unsigned>(requirements_result));
     }
 
     g_state.sr_enabled = want_sr;
@@ -335,21 +356,6 @@ extern "C" void DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device)
     if (g_state.fg_enabled)
         log_result("slIsFeatureSupported(DLSS-G)",
             g_state.is_feature_supported(sl::kFeatureDLSS_G, adapter));
-}
-
-extern "C" void DethraceStreamlineSetVulkanInfo(void* instance, void* physical_device,
-    void* device, uint32_t queue_family) {
-    if (!g_state.initialized || g_state.set_vulkan_info == nullptr)
-        return;
-    sl::VulkanInfo info{};
-    info.instance = reinterpret_cast<VkInstance>(instance);
-    info.physicalDevice = reinterpret_cast<VkPhysicalDevice>(physical_device);
-    info.device = reinterpret_cast<VkDevice>(device);
-    info.graphicsQueueFamily = queue_family;
-    info.graphicsQueueIndex = 0;
-    info.computeQueueFamily = queue_family;
-    info.computeQueueIndex = 0;
-    log_result("slSetVulkanInfo", g_state.set_vulkan_info(info));
 }
 
 extern "C" int DethraceStreamlineEvaluate(const dethrace_streamline_frame* frame) {
@@ -435,7 +441,6 @@ extern "C" int DethraceStreamlinePrepare(void) { return 0; }
 extern "C" void* DethraceStreamlineGetInstanceProcAddr(void) { return nullptr; }
 extern "C" void* DethraceStreamlineGetDeviceProcAddr(void*, const char*) { return nullptr; }
 extern "C" void DethraceStreamlineSetVulkanPhysicalDevice(void*) {}
-extern "C" void DethraceStreamlineSetVulkanInfo(void*, void*, void*, uint32_t) {}
 extern "C" int DethraceStreamlineEvaluate(const dethrace_streamline_frame*) { return 0; }
 extern "C" void DethraceStreamlineShutdown(void) {}
 
