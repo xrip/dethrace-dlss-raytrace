@@ -6,6 +6,7 @@
 #include "harness.h"
 #include "harness/config.h"
 #include "harness/hooks.h"
+#include "harness/streamline_bridge.h"
 #include "harness/trace.h"
 #include "sdl2_scancode_map.h"
 #include "sdl2_syms.h"
@@ -466,6 +467,11 @@ static void SDL2_Harness_GetViewport(int* x, int* y, float* width_multipler, flo
 // interposer's vkGetInstanceProcAddr instead, which is why the driver resolves
 // every entry point through it.
 static void* SDL2_Harness_Vulkan_GetInstanceProcAddr(void) {
+    if (DethraceStreamlinePrepare()) {
+        void* streamline_proc_addr = DethraceStreamlineGetInstanceProcAddr();
+        if (streamline_proc_addr != NULL)
+            return streamline_proc_addr;
+    }
     return SDL2_Vulkan_GetVkGetInstanceProcAddr();
 }
 

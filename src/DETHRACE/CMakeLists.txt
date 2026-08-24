@@ -218,6 +218,14 @@ endif()
 target_link_libraries(dethrace PRIVATE dethrace_obj compile_with_werror)
 target_sources(dethrace PRIVATE main.c)
 
+if(DETHRACE_STREAMLINE AND DETHRACE_STREAMLINE_ROOT)
+    add_custom_command(TARGET dethrace POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${DETHRACE_STREAMLINE_ROOT}/bin/x64"
+            "$<TARGET_FILE_DIR:dethrace>"
+        COMMENT "Copying Streamline runtime DLLs")
+endif()
+
 if(DETHRACE_IDE_ROOT_DIR)
     set_target_properties(dethrace PROPERTIES
         VS_DEBUGGER_ENVIRONMENT "DETHRACE_ROOT_DIR=${DETHRACE_IDE_ROOT_DIR}"

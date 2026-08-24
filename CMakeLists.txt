@@ -45,6 +45,40 @@ option(DETHRACE_NET_ENABLED "Include net support" ON)
 option(DETHRACE_PLATFORM_SDL1 "Support SDL 1.2 platform driver" OFF)
 option(DETHRACE_PLATFORM_SDL2 "Support SDL 2 platform driver" ON)
 option(DETHRACE_PLATFORM_SDL3 "Support SDL 3 platform driver" OFF)
+option(DETHRACE_STREAMLINE "Build the optional Vulkan Streamline DLSS/DLSS-G bridge" OFF)
+set(DETHRACE_STREAMLINE_ROOT "" CACHE PATH "Streamline SDK root (contains include/ and bin/x64/)")
+
+if(DETHRACE_STREAMLINE)
+    if(NOT WIN32)
+        message(FATAL_ERROR "DETHRACE_STREAMLINE currently requires Windows Vulkan interposer support")
+    endif()
+    if(NOT EXISTS "${DETHRACE_STREAMLINE_ROOT}/include/sl.h")
+        message(FATAL_ERROR "DETHRACE_STREAMLINE_ROOT must point to a Streamline SDK root")
+    endif()
+    find_package(Vulkan REQUIRED)
+    enable_language(CXX)
+    add_library(dethrace-streamline STATIC
+        src/harness/streamline_bridge.cpp
+        src/harness/include/harness/streamline_bridge.h
+    )
+    target_include_directories(dethrace-streamline PRIVATE
+        src/harness/include
+        "${DETHRACE_STREAMLINE_ROOT}/include"
+        ${Vulkan_INCLUDE_DIRS}
+    )
+    target_compile_definitions(dethrace-streamline PRIVATE DETHRACE_STREAMLINE)
+    set_target_properties(dethrace-streamline PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED TRUE
+        FOLDER "Dethrace"
+    )
+else()
+    add_library(dethrace-streamline STATIC
+        src/harness/streamline_bridge_stub.c
+        src/harness/include/harness/streamline_bridge.h
+    )
+    target_include_directories(dethrace-streamline PRIVATE src/harness/include)
+endif()
 
 option(MSVC_42_FOR_RECCMP "Build with MSVC 4.2 to match assembly" OFF)
 
