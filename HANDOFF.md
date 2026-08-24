@@ -4,10 +4,9 @@
 
 - Repository: `C:\Users\xr1p\CLionProjects\dethrace-vulkan`
 - Branch: `feature/vulkan-renderer`
-- Root work is based on commit `6ca4de2` (`feat(streamline): add DLSS and frame generation bridge`).
-- BRender submodule commit: `15d62bd` (`wip(vkrend): advance DLSS-G device integration`).
-- Current work is a checkpoint. DLSS Super Resolution runs, but DLSS Frame Generation does not yet make generated frames.
-- Do not call Stage 5 or Stage 6 complete.
+- BRender submodule commit: `5b23b62` (`fix(vkrend): make DLSS-G interpolate and stop the jitter shake`).
+- DLSS Super Resolution runs. **DLSS Frame Generation now makes real generated frames**: 1372 presented for 690 host presents on an RTX 5060 Ti, driver 610.88, 640x480 scene at 1280x720. That is a clean 2x and it repeats across runs.
+- Stage 6's first hard gate (`presented > host-presents`) is met. Stage 5 and Stage 6 are still **not** complete: no saved HD A/B images, no ghosting check, no FPS/latency table, no INI or command-line settings.
 
 ## Project purpose and target
 
@@ -80,7 +79,16 @@ The current checkpoint adds:
 - HUD-less colour tagging and DLSS-G state counters.
 - A plain Vulkan path that does not install Streamline hooks when DLSS and FG are off.
 
-DLSS-G loads and returns status 0, but it does not interpolate. The last 35-second live run reported `750 presented / 750 host-presents`, with `max-generated=5`. A working run must have more presented frames than host presents. Stage 6 is not complete.
+DLSS-G interpolates. The SDK log reports `DLSS-G interpolation state changed from disabled to enabled (mode=sl::DLSSGMode::eOn, numFramesToGenerate=1)` and the counter reaches `presented=1372 host-presents=690`.
+
+Four faults had to be fixed together to get there. All four are in the BRender submodule (`5b23b62`):
+
+1. `vksetup.c` put `VkPhysicalDeviceVulkan12Features` into the device `pNext` chain with `sType` left at zero. The driver skipped the struct, so `timelineSemaphore`, `descriptorIndexing` and `bufferDeviceAddress` were never actually enabled for Streamline.
+2. Freeing a model or a texture outside a scene called `vkDeviceWaitIdle`, and the "deferred" path was really a `QueueWaitIdle` at scene end. A 25-second race made **5887** such stalls, about thirteen per frame. Streamline flushes every DLSS-G worker queue on each one, so interpolation could never build up. Retired objects now carry the frame that released them and are destroyed once that frame's fence has been waited on (`DeviceVkRetireDeferred`). This also lifted the frame rate: the game now holds the 30 FPS cap where it used to sit near 21.
+3. `sl.dlss_g` registers its `vkCreateSwapchainKHR` hook when the plug-in starts up, so `DethraceStreamlineSetVulkanPhysicalDevice` now runs **before** `DeviceVkCreateSwapchain`, not after it.
+4. The Halton jitter was applied to the projection on every scene, including frames DLSS never resolved. The offset reached the screen as a sub-pixel left/right shake, clearest on distant high-contrast edges. Jitter is now gated on `streamline_sr_active`.
+
+Stage 6 is still not complete: image quality, a safe FG off/on path, and settings work all remain.
 
 ## Current architecture
 
@@ -137,16 +145,23 @@ DLSS-G loads and returns status 0, but it does not interpolate. The last 35-seco
 
 Work in this order. These are direct integration faults, not image-quality tuning items.
 
-1. **Plain Vulkan has a new validation error.** `drivers/vkrend/vksetup.c` creates `VkPhysicalDeviceVulkan12Features vk12 = {0}` but never sets `vk12.sType`. It is put in the device `pNext` chain, so validation reads type 0 as `VK_STRUCTURE_TYPE_APPLICATION_INFO`. Set `vk12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES`, rebuild, and run plain Vulkan with validation before any other FG work.
-2. **`sl::Constants::renderingGameFrames` is not set.** A zero-made `sl::Constants` leaves this field invalid. The Streamline DLSS-G checklist says it must say whether game frames are being rendered. Set it to `sl::Boolean::eTrue` for the current normal game frame path, then test generated-frame counts.
-3. **The Streamline preference flags replace all defaults.** The bridge sets only `eUseFrameBasedResourceTagging`. The SDK log then says several command-list state hooks are not supported and the plug-in may not work. Test `eDisableCLStateTracking | eUseFrameBasedResourceTagging`, which keeps the intended no-state-tracking mode while using frame tags.
-4. **Feature checks happen too early.** `DethraceStreamlinePrepare()` asks NGX/plug-ins about feature state before the Vulkan device is ready. Startup logs show `getNGXFeatureRequirements 0xbad00005` and `initializePlugins ... without device being created`. Move support/state checks after `slSetVulkanInfo` and device setup.
-5. **Backbuffer extent is not clean.** DLSS-G logs `Invalid backbuffer resource extent ... 0 x 0` and resets it to 1280x720. Restore a correct display extent for the virtual backbuffer path without giving Streamline a false resource handle.
-6. **UI input is not yet a true display-size alpha layer.** The current 640x480 upload image is not tagged as UI when output is 1280x720. The DLSS output is used as HUD-less colour. Before FG can be called visually correct, make and tag a display-size UI colour+alpha layer or prove the current composite order is safe.
-7. **Camera planes are hard-coded.** The bridge uses near 0.1 and far 10000. Pass the real BRender camera values before final DLSS image tests.
-8. **Validation is off under Streamline.** This is a known limit caused by its virtual swapchain resources. Always keep a separate plain Vulkan validation run.
-9. **No runtime settings UI.** DLSS and FG are environment-only. The planned INI/CLI controls and safe live toggle do not exist.
-10. **Stage 4 and visual proof remain open.** Add the motion debug view, then save HD A/B frames and check smoke, sparks, mirror, map, fog, translucency, moving-car trails, and HUD stability.
+1. **Backbuffer extent is not clean.** DLSS-G logs `Invalid backbuffer resource extent ... 0 x 0` and resets it to 1280x720. Restore a correct display extent for the virtual backbuffer path without giving Streamline a false resource handle.
+2. **UI input is not yet a true display-size alpha layer.** The current 640x480 upload image is not tagged as UI when output is 1280x720. The DLSS output is used as HUD-less colour. Before FG can be called visually correct, make and tag a display-size UI colour+alpha layer or prove the current composite order is safe.
+3. **Camera planes are hard-coded.** The bridge uses near 0.1 and far 10000. Pass the real BRender camera values before final DLSS image tests.
+4. **FG toggles without recreating the swapchain.** `DethraceStreamlineSetFrameGenerationActive` flips DLSS-G between `eOn` and `eOff` as `scene_has_content` changes, so the SDK logs `DLSS-G interpolation state changed` several times a run. The DLSS-G guide, section 18.0, says the swapchain should be recreated on every such change.
+5. **Startup priming makes the FG counter mix menu frames.** `DethraceStreamlineSetVulkanPhysicalDevice` calls `slDLSSGSetOptions(eOn)` to force plug-in startup before the swapchain exists, and it sets `fg_runtime_on` at the same time. The counter therefore also counts menu frames, where FG is genuinely off, so a run that never reaches a race reads `presented == host-presents` and looks like a failure. It also produces `Repeated slDLSSGSetOptions() call for the frame N` warnings. Separate "plug-in primed" from "FG running".
+6. **Three `sl.common` Vulkan hooks stay unsupported.** The SDK logs `Hook sl.common:Vulkan:CmdBindPipeline / CmdBindDescriptorSets / BeginCommandBuffer is NOT supported`. Adding `eDisableCLStateTracking` to the preference flags did not remove them. FG works anyway, so this is not blocking, but it is unexplained.
+7. **Validation is off under Streamline.** This is a known limit caused by its virtual swapchain resources. Always keep a separate plain Vulkan validation run.
+8. **No runtime settings UI.** DLSS and FG are environment-only. The planned INI/CLI controls and safe live toggle do not exist.
+9. **Stage 4 and visual proof remain open.** Add the motion debug view, then save HD A/B frames and check smoke, sparks, mirror, map, fog, translucency, moving-car trails, and HUD stability.
+10. **Jitter scale has a small oddity.** `set_scene_jitter` computes `width = render_area.extent.width * scale + 0.5f`, where `scale` is `render_scale` again even though `render_area` is already the scene extent. With `render_scale` at 1.0 this only costs a 640 vs 640.5 rounding difference, but it would be wrong at any other render scale.
+
+### Corrections to earlier handoff text
+
+Two items in the previous list were wrong and have been dropped:
+
+- **`sl::Constants::renderingGameFrames` does not exist in Streamline 2.12.** It appears only in the SDK's stale `docs/ProgrammingGuide.md:1210` and `docs/ProgrammingGuideDLSS_G.md:932`; the shipped `include/sl_consts.h` has no such field. Setting it would not compile.
+- **`slSetVulkanInfo` must not be called here.** `include/sl_helpers_vk.h:250` says it is only for hosts that do **not** use Streamline's `vkCreateDevice` / `vkCreateInstance` proxies, and `vksetup.c` fetches every entry point through the interposer, so it does use them. The real ordering fault was that `slIsFeatureLoaded` needs the device first (`include/sl_core_api.h:117`); those checks now run in `DethraceStreamlineSetVulkanPhysicalDevice`.
 
 ## Build setup
 
@@ -228,31 +243,25 @@ Result: exit 0, `ninja: no work to do`. Ninja considers the current source built
 
 ### CTest
 
-Command:
-
-```text
-ctest --test-dir cmake-build-streamline --output-on-failure
-```
-
-Result: exit 0, but `No tests were found!!!`. This build has no registered automated tests.
+`ctest --test-dir cmake-build-streamline` reports `No tests were found!!!`; that build registers no tests. The separate `cmake-build-tests` directory does: `ctest --test-dir cmake-build-tests` runs `test_dethrace` and it passes. Neither covers the Vulkan or Streamline paths.
 
 ### Plain Vulkan live check
 
-Run time: 22 seconds at 1280x720 with a 640x480 scene target. The process was stopped by the handoff check, so its exit code was 1 from `taskkill`, not a game crash. Vulkan made the device, swapchain, 2D upload image, and 3D scene target. It also gave the `vk12.sType` validation error listed above.
+Run time: 30 seconds at 1280x720 with a 640x480 scene target, validation layer on. The process was stopped by the check, so its exit code came from the kill, not a crash. Vulkan made the device, swapchain, 2D upload image, and 3D scene target, and produced **no validation messages at all**. The old `vk12.sType` error is gone.
 
 ### DLSS + FG live check
 
-Run time: 35 seconds on NVIDIA GeForce RTX 5060 Ti, driver 610.88. The process was stopped by the handoff check. Results:
+Run time: 35 seconds on NVIDIA GeForce RTX 5060 Ti, driver 610.88. Results:
 
-- DLSS loaded: yes
-- DLSS-G loaded: yes
-- Requirement results: 0
+- DLSS loaded: yes; DLSS-G loaded: yes; requirement results 0
 - Frame contract: `SR=on FG=on Reflex=on PCL=on mask=3`
-- Scene target: 640x480
-- Swapchain: 1280x720, mailbox present mode
-- Last counter: `presented=750 host-presents=750 max-generated=5`
+- Scene target 640x480, swapchain 1280x720, mailbox present mode
+- Last counter: `presented=1372 host-presents=690 max-generated=5`
+- SDK log: `DLSS-G interpolation state changed from disabled to enabled (mode=sl::DLSSGMode::eOn, numFramesToGenerate=1)`
 
-The feature is loaded but interpolation is off.
+Interpolation is running at a clean 2x. Repeated across three separate runs.
+
+Caution when reading the counter: because the plug-in is primed at startup, menu frames are counted too. A run that stays in the menus reads `presented == host-presents` and looks like a failure even though FG is fine. Always let the run reach a race.
 
 ### Control sample
 
@@ -278,16 +287,14 @@ These are not part of the Vulkan/DLSS checkpoint and remain uncommitted.
 
 ## Next work, in order
 
-1. Set `vk12.sType`, build, and prove a clean plain Vulkan device-create path.
-2. Set `constants.renderingGameFrames = sl::Boolean::eTrue`.
-3. Keep `eDisableCLStateTracking` with frame-based tagging.
-4. Move feature/NGX checks until after the Vulkan device data is set.
-5. Run the same 30 FPS check. The first hard gate is `presented > host-presents`.
-6. Fix the 0x0 backbuffer extent warning and give FG a correct display-size HUD-less/UI contract.
-7. Add a safe FG off/on path and show that game physics still runs at host-frame speed.
-8. Finish the Stage 4 motion-vector debug view and validate camera, car, and 2D motion fields.
-9. Save DLSS Quality 1080p A/B images, inspect moving-car trails and HUD stability, and record FPS and latency.
-10. Add INI/CLI settings, fallback tests, licence text, and shipping documentation.
+1. Confirm by eye that the left/right shake is gone, in both plain Vulkan and DLSS mode. The jitter gate is a code fix that has not yet had a visual check.
+2. Fix the 0x0 backbuffer extent warning and give FG a correct display-size HUD-less/UI contract.
+3. Recreate the swapchain when FG is switched on or off, and show that game physics still runs at host-frame speed.
+4. Separate plug-in priming from FG runtime state so the counter measures only frames where FG is really on.
+5. Pass the real BRender near/far planes instead of the hard-coded 0.1 / 10000.
+6. Finish the Stage 4 motion-vector debug view and validate camera, car, and 2D motion fields.
+7. Save DLSS Quality 1080p A/B images, inspect moving-car trails and HUD stability, and record FPS and latency.
+8. Add INI/CLI settings, fallback tests, licence text, and shipping documentation.
 
 ## Important files to inspect first
 
@@ -307,4 +314,4 @@ These are not part of the Vulkan/DLSS checkpoint and remain uncommitted.
 
 ## Current objective
 
-Make Vulkan DLSS-G create real generated frames without hiding errors or changing game timing. The next measurable success is a clean Vulkan run plus a DLSS-G counter where presented frames are greater than host presents. After that, inspect the HD image and close the Stage 4/5/6 visual checks.
+DLSS-G now creates real generated frames, so the objective moves from "make it run" to "make it look right". Next: confirm the shake fix by eye, give FG a correct display-size HUD-less/UI contract, recreate the swapchain on FG toggles, then close the Stage 4/5/6 visual checks with saved HD A/B frames and an FPS and latency table.

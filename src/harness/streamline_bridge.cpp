@@ -312,6 +312,24 @@ void configure_options(const dethrace_streamline_frame& frame) {
     }
 }
 
+/* slIsFeatureLoaded and slGetFeatureRequirements both need the Vulkan device to
+ * exist (sl_core_api.h:117). Asking during slInit made the plug-ins answer from
+ * an uninitialized NGX, so this runs once the device has been created. */
+void report_feature_state(sl::Feature feature, const char* name) {
+    if (g_state.is_feature_loaded != nullptr) {
+        bool loaded = false;
+        log_result("slIsFeatureLoaded", g_state.is_feature_loaded(feature, loaded));
+        std::fprintf(stderr, "STREAMLINE: %s feature loaded=%s\n", name, loaded ? "yes" : "no");
+    }
+    if (g_state.get_feature_requirements != nullptr) {
+        sl::FeatureRequirements requirements{};
+        const sl::Result result = g_state.get_feature_requirements(feature, requirements);
+        log_result("slGetFeatureRequirements", result);
+        std::fprintf(stderr, "STREAMLINE: %s requirements result=%u flags=%u\n", name,
+            static_cast<unsigned>(result), static_cast<unsigned>(requirements.flags));
+    }
+}
+
 void query_dlssg_state(bool count_present) {
     if (!g_state.fg_runtime_on || g_state.dlssg_get_state == nullptr)
         return;
@@ -409,8 +427,13 @@ extern "C" int DethraceStreamlinePrepare(void) {
     preferences.numFeaturesToLoad = feature_count;
     /* Keep the bundled SDK and plug-ins as one versioned set. The SDK default
      * opts into OTA plug-ins, but a 2.11 cache beside the 2.12 package can
-     * mix ABI versions and break NGX initialization. */
-    preferences.flags = sl::PreferenceFlags::eUseFrameBasedResourceTagging;
+     * mix ABI versions and break NGX initialization.
+     *
+     * eDisableCLStateTracking is part of the SDK default and must be kept:
+     * assigning only the tagging flag drops it, and the plug-ins then report
+     * missing command-list state hooks on the Vulkan path. */
+    preferences.flags = sl::PreferenceFlags::eDisableCLStateTracking
+        | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
     if (env_enabled("DETHRACE_STREAMLINE_CONSOLE", false))
         preferences.showConsole = true;
 
@@ -420,38 +443,6 @@ extern "C" int DethraceStreamlinePrepare(void) {
         FreeLibrary(g_state.module);
         g_state.module = nullptr;
         return 0;
-    }
-
-    if (g_state.is_feature_loaded != nullptr) {
-        bool loaded = false;
-        if (want_sr) {
-            const sl::Result feature_result = g_state.is_feature_loaded(sl::kFeatureDLSS, loaded);
-            log_result("slIsFeatureLoaded(DLSS)", feature_result);
-            std::fprintf(stderr, "STREAMLINE: DLSS feature loaded=%s\n", loaded ? "yes" : "no");
-        }
-        loaded = false;
-        if (want_fg) {
-            const sl::Result feature_result = g_state.is_feature_loaded(sl::kFeatureDLSS_G, loaded);
-            log_result("slIsFeatureLoaded(DLSS-G)", feature_result);
-            std::fprintf(stderr, "STREAMLINE: DLSS-G feature loaded=%s\n", loaded ? "yes" : "no");
-        }
-    }
-    if (g_state.get_feature_requirements != nullptr && want_sr) {
-        sl::FeatureRequirements requirements{};
-        const sl::Result requirements_result = g_state.get_feature_requirements(
-            sl::kFeatureDLSS, requirements);
-        log_result("slGetFeatureRequirements(DLSS)", requirements_result);
-        std::fprintf(stderr, "STREAMLINE: DLSS requirements result=%u\n",
-            static_cast<unsigned>(requirements_result));
-    }
-    if (g_state.get_feature_requirements != nullptr && want_fg) {
-        sl::FeatureRequirements requirements{};
-        const sl::Result requirements_result = g_state.get_feature_requirements(
-            sl::kFeatureDLSS_G, requirements);
-        log_result("slGetFeatureRequirements(DLSS-G)", requirements_result);
-        std::fprintf(stderr, "STREAMLINE: DLSS-G requirements result=%u flags=%u\n",
-            static_cast<unsigned>(requirements_result),
-            static_cast<unsigned>(requirements.flags));
     }
 
     g_state.sr_enabled = want_sr;
@@ -504,6 +495,10 @@ extern "C" int DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device) 
         return 0;
     sl::AdapterInfo adapter{};
     adapter.vkPhysicalDevice = physical_device;
+    if (g_state.sr_enabled)
+        report_feature_state(sl::kFeatureDLSS, "DLSS");
+    if (g_state.fg_enabled)
+        report_feature_state(sl::kFeatureDLSS_G, "DLSS-G");
     if (g_state.sr_enabled) {
         const sl::Result result = g_state.is_feature_supported(sl::kFeatureDLSS, adapter);
         log_result("slIsFeatureSupported(DLSS)", result);
@@ -522,6 +517,18 @@ extern "C" int DethraceStreamlineSetVulkanPhysicalDevice(void* physical_device) 
             g_state.fg_enabled = false;
     }
     load_feature_functions();
+
+    /* Force sl.dlss_g to start up now, while the caller has not yet created the
+     * swapchain. Plug-in startup is what registers slHookVkCreateSwapchainKHR,
+     * and DLSS-G can only interpolate into a swapchain it created itself. */
+    if (g_state.fg_enabled && g_state.dlssg_set_options != nullptr) {
+        sl::DLSSGOptions options{};
+        options.mode = sl::DLSSGMode::eOn;
+        options.numFramesToGenerate = 1;
+        log_result("slDLSSGSetOptions(startup)", g_state.dlssg_set_options(g_state.viewport, options));
+        g_state.fg_runtime_on = true;
+        g_state.fg_options_set = true;
+    }
     return (g_state.sr_enabled || g_state.fg_enabled) ? 1 : 0;
 }
 
