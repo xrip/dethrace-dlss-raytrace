@@ -4,7 +4,7 @@
 
 - Repository: `C:\Users\xr1p\CLionProjects\dethrace-vulkan`
 - Branch: `feature/vulkan-renderer`
-- BRender submodule commit: `797f3d0` (`feat(vkrend): filter opaque textures instead of point sampling them`).
+- BRender submodule commit: `8540bf3` (`fix(vkrend): give texture descriptor sets back to the pool`).
 - The Vulkan path now also has a widescreen scene mode, filtered opaque textures, and a save-driven quick race. See the fixed/known-issue lists below.
 - DLSS Super Resolution runs. **DLSS Frame Generation now makes real generated frames**: 1372 presented for 690 host presents on an RTX 5060 Ti, driver 610.88, 640x480 scene at 1280x720. That is a clean 2x and it repeats across runs.
 - Stage 6's first hard gate (`presented > host-presents`) is met. Stage 5 and Stage 6 are still **not** complete: no saved HD A/B images, no ghosting check, no FPS/latency table, no INI or command-line settings.
@@ -165,7 +165,8 @@ Work in this order. These are direct integration faults, not image-quality tunin
   - Worth knowing: reading `renderer->state.current` unconditionally instead **crashes**. For geometry with no material it picks up whatever colour map the current state holds, which can outlive the `br_buffer_stored` it names.
 - **Opaque textures are now filtered.** The game never asks for filtering, so every surface used to be point sampled at mip 0 and the mip chain built on upload was never read. Vulkan now uses linear, full mips and max anisotropy for opaque draws. Beyond sharpness this removes distant shimmer, which was temporal noise DLSS could not settle. `--vulkan` deliberately no longer matches the software and OpenGL look. Fixed in BRender `797f3d0`.
   - Colour-keyed draws stay point sampled, and must until the key becomes a real alpha channel. See the open item below.
-- **Descriptor set leak, still open.** Texture descriptor sets come from a 16384-set pool created with `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT`, but `vkFreeDescriptorSets` is called nowhere in the driver. Every texture resize orphans up to four sets permanently. When the pool runs dry `BufferStoredVkBind` fails and `gstored.c` skips the draw, so the symptom is pedestrians vanishing rather than drawing wrong. Not yet hit in a normal session, but it is a real leak.
+- **Texture descriptor sets are handed back.** They came from a 16384-set pool created with `FREE_DESCRIPTOR_SET_BIT`, but `vkFreeDescriptorSets` was called nowhere, so every texture resize orphaned up to four sets permanently. When the pool ran dry `BufferStoredVkBind` failed and the draw was skipped, which would show as textured objects going missing. Sets now retire against the frame fence like images and buffers. Measured over a 120-second race the live count sits flat at 147 instead of climbing. Fixed in BRender `8540bf3`.
+  - Only sets belonging to the pool currently alive may be freed. `DeviceVkSceneDestroy` tears the pool down and builds a new one -- that is what `texture_descriptor_generation` signals -- and a texture left behind by that carries handles into a pool that no longer exists. Freeing those crashes intermittently, well after the fact. It cost a bisect to find; do not remove that guard.
 
 ### Corrections to earlier handoff text
 
@@ -290,7 +291,7 @@ Run time: 35 seconds on NVIDIA GeForce RTX 5060 Ti, driver 610.88. Results:
 
 Interpolation is running at a clean 2x. Repeated across three separate runs.
 
-Caution when reading the counter: because the plug-in is primed at startup, menu frames are counted too. A run that stays in the menus reads `presented == host-presents` and looks like a failure even though FG is fine. Always let the run reach a race.
+**Read the counter carefully.** The plug-in is primed at startup, so menu and loading frames are counted too, and FG is genuinely off for those. A run that has not reached a moving race reads `presented == host-presents` and looks exactly like a broken feature. This has produced a false alarm twice. Judge it on the *last* few samples rather than the totals: 30 host presents turning into 60 presented is FG working, whatever the running total says. Allow 90 seconds; 60 is not always enough for a save-loaded race to get going.
 
 ### Control sample
 
