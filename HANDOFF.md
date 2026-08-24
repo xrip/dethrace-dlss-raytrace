@@ -1,347 +1,441 @@
-# Dethrace Vulkan handoff
+# Dethrace Vulkan renderer — handoff
 
-## State at transfer
+## 1. What this project is
+
+Dethrace is an open reimplementation of Carmageddon (1997). This branch,
+`feature/vulkan-renderer`, adds a third renderer — `vkrend` — beside the existing
+software and OpenGL ones, selected with `--vulkan`.
+
+The point of a Vulkan path is not Vulkan for its own sake. It is the only way to
+reach NVIDIA Streamline, and through it DLSS Super Resolution and DLSS Frame
+Generation. The target is to take a 1997 game that renders at 640x480 and put a
+clean, modern, high-refresh HD image on screen without touching game rules,
+physics, input, asset formats, or the speed at which the simulation runs.
+
+Constraints that shape every decision here:
+
+1. Game rules, physics, input and asset handling stay untouched.
+2. The software and OpenGL renderers must keep working exactly as before.
+3. `src/DETHRACE/**` is *reconstructed original code*, verified against the
+   original binary by `reccmp` (see `reccmp-project.yml`). Changing a
+   reconstructed function breaks that verification. Prefer the harness, the
+   driver, or brand-new files.
+
+`VK-PLAN.md` holds the original staged design (stages 0-6) and is still the
+reference for the acceptance criteria.
+
+## 2. State at transfer
 
 - Repository: `C:\Users\xr1p\CLionProjects\dethrace-vulkan`
 - Branch: `feature/vulkan-renderer`
-- BRender submodule commit: `8540bf3` (`fix(vkrend): give texture descriptor sets back to the pool`).
-- The Vulkan path now also has a widescreen scene mode, filtered opaque textures, and a save-driven quick race. See the fixed/known-issue lists below.
-- DLSS Super Resolution runs. **DLSS Frame Generation now makes real generated frames**: 1372 presented for 690 host presents on an RTX 5060 Ti, driver 610.88, 640x480 scene at 1280x720. That is a clean 2x and it repeats across runs.
-- Stage 6's first hard gate (`presented > host-presents`) is met. Stage 5 and Stage 6 are still **not** complete: no saved HD A/B images, no ghosting check, no FPS/latency table, no INI or command-line settings.
+- Root HEAD: `7430f40`
+- BRender submodule: `8540bf3`, branch `feature/vulkan-renderer`
+- Working tree clean apart from four deliberately untracked directories (§9).
 
-## Project purpose and target
+**DLSS Frame Generation works.** Measured this session on an RTX 5060 Ti,
+driver 610.88, Streamline 2.12, DLSS `v310.7.0`: a 960x540 scene upscaled to
+1920x1080 reaches a clean 2x — 30 host presents producing 60 presented frames,
+sustained. This was the branch's main open goal and it is now met.
 
-This branch adds a modern Vulkan renderer to Dethrace, the open Carmageddon engine. The long-term target is:
+It is not, however, robust: see §7 item 1, a bug found during the final
+verification run, where a swapchain rebuild silently turns frame generation off
+for the rest of the session.
 
-1. Keep the old game rules, physics, input, and asset format.
-2. Draw the real 3D models through Vulkan.
-3. Keep the software and OpenGL paths working.
-4. Give Vulkan separate render and display sizes, sampled depth, motion vectors, jitter, and separate scene/UI layers.
-5. Use NVIDIA Streamline 2.12 for DLSS Super Resolution and Vulkan DLSS Frame Generation.
-6. Turn the old 640x480 scene into a clean HD output without camera jitter, car trails, HUD warping, or changes to game speed.
+## 3. What changed in this session, and why
 
-`VK-PLAN.md` is the design plan. It has stages 0 through 6.
+### BRender submodule (`15d62bd` → `8540bf3`)
 
-## Stage status
+**`5b23b62` — make DLSS-G interpolate, and stop the jitter shake.**
+Frame generation loaded, reported healthy, and produced nothing. Four separate
+faults had to be fixed together before a single generated frame appeared:
 
-### Stage 3: Vulkan 3D parity
+- `vksetup.c` chained `VkPhysicalDeviceVulkan12Features` into the device
+  `pNext` list with `sType` left at zero. Drivers walk that chain by `sType`,
+  so the struct was skipped and `timelineSemaphore`, `descriptorIndexing` and
+  `bufferDeviceAddress` — all needed by the NGX kernel — were never actually
+  enabled. This looked like a mere validation warning; it was not.
+- Freeing a model or texture called `vkDeviceWaitIdle`, and the so-called
+  "deferred" path was a `QueueWaitIdle` at scene end. A 25-second race made
+  **5887** such stalls, roughly thirteen per frame. Streamline flushes every
+  DLSS-G worker queue on each one, so interpolation could never establish
+  itself. Retired objects now carry the frame that released them and die once
+  that frame's fence has been waited on (`DeviceVkRetireDeferred`). Side
+  benefit: the frame rate rose from about 21 to holding the 30 cap.
+- `sl.dlss_g` installs its `vkCreateSwapchainKHR` hook when the plug-in starts
+  up, and it starts up on first use. The swapchain was being created before
+  that, so DLSS-G never owned the swapchain it was asked to interpolate into.
+  Streamline device setup now runs before `DeviceVkCreateSwapchain`.
+- The Halton jitter was applied on every scene, including frames DLSS never
+  resolved, so the offset reached the screen as a sub-pixel horizontal shake —
+  most visible on distant flat surfaces. Jitter is now gated on
+  `streamline_sr_active`.
 
-The Vulkan 3D renderer is implemented and committed. It draws stored models, textures, ordered/translucent geometry, depth, the scene, and the 2D composite. The user accepted this as the working Vulkan milestone after testing car damage and repair.
+**`122fa8c` — scene renders at its own size and aspect.**
+`DETHRACE_VULKAN_SCENE_SIZE=<w>x<h>` decouples the 3D scene from the game's
+640x480 screen. This exists because asking DLSS to turn a 4:3 640x480 scene into
+16:9 1920x1080 is a 3.0x/2.25x non-uniform stretch that matches no DLSS mode: it
+returned `eOk` and wrote nothing, giving a **black screen with no error**.
+960x540 is 16:9 and exactly 2x to 1920x1080. The scene target now scales x and y
+independently; `render_scale` remains the older uniform down-scale, and both go
+through `DeviceVkSceneScale` so nothing computes scene pixels on its own.
+`DeviceVkRecordOverlay` fits the 2D layer at its own aspect and centres it, so
+the HUD and menus are no longer stretched.
 
-The original Stage 3 checklist is not fully closed. Smoke and sparks were not seen in the user test and were put off for later. A full effect-set comparison, full-race validation run, and final Vulkan/OpenGL FPS table should still be done before a release claim.
+**`1322d89` — ordered draws get their own material.**
+Every pedestrian wore the same sprite, switching to it the moment its animation
+advanced. An ordered draw is queued while models are walked and flushed only
+after all of them have been. `StoredVkRenderGroup` read the material from
+`vk_group_info`, which lives on the *geometry*, not the draw. Carmageddon gives
+every pedestrian the same `br_material` and swaps its colour map per pedestrian,
+so at flush time that one stored state held only the last pedestrian's sprite.
+The queued primitive already snapshots the state stack, so the resolved material
+is now folded into that snapshot and the state each draw should use is passed
+explicitly.
 
-Important root commits include:
+**`797f3d0` — filter opaque textures.**
+The game never asks for texture filtering: BRender defaults `prim.filter` and
+`prim.mip_filter` to `BRT_NONE` and nothing in `src/DETHRACE` overrides them. So
+every surface was point-sampled at mip 0 and the mip chain built on every upload
+was never read. Beyond blockiness this made distant surfaces shimmer, which is
+temporal noise DLSS cannot settle — it was degrading reconstruction, not just
+sharpness. Opaque draws now use linear + full mips + max anisotropy. The
+samplers already existed; nothing selected them.
 
-- `3000d4d` - Stage 2 renderer base.
-- `0d52d65`, `a9b1bcb` - Stage 3 geometry and depth work.
-- `a376ef0`, `89bd70c` - Stage 3 state and validation notes.
+**`8540bf3` — hand texture descriptor sets back to the pool.**
+A texture's descriptor set names the image view it was written with, so
+replacing the image abandons the set. Nothing ever freed one. The pool is
+created with `FREE_DESCRIPTOR_SET_BIT` and holds 16384, so a long enough race
+emptied it, after which `BufferStoredVkBind` failed and the caller *skipped the
+draw* — textured objects would simply start going missing. Sets now retire
+against the frame fence. Measured over a 120-second race the live count sits
+flat at 147 instead of climbing.
 
-Important BRender commits include:
+### Root repository (`8f05d0d` → `7430f40`)
 
-- `46177e4` - Vulkan driver base.
-- `22bd6a1`, `b00204d`, `70d0f1e` - textured and ordered 3D work.
+**`bd738ea` — Streamline bridge corrections.** `slIsFeatureLoaded` requires the
+Vulkan device to exist (`sl_core_api.h:117`), so the feature-loaded and
+requirements queries moved out of `DethraceStreamlinePrepare` into
+`DethraceStreamlineSetVulkanPhysicalDevice`, which also primes `sl.dlss_g` so
+its swapchain hook is installed before the caller creates the swapchain.
+`eDisableCLStateTracking` is part of the SDK's default preference flags and was
+being dropped by assigning only the tagging flag.
 
-### Stage 4: DLSS input data
+**`a0bf529` — widescreen camera aspect.** A wider scene target alone just
+stretches the same 4:3 picture; the camera has to agree. BRender's
+`field_of_view` is vertical and horizontal view is derived as
+`atan(tan(fov/2) * aspect)` (`depth.c:294`), so setting the forward cameras'
+aspect to the scene aspect gives **Hor+** widescreen — same vertical view, more
+at the sides — with no FOV retuning. The game's own culling, horizon and sky all
+read `camera->aspect`, so they follow automatically.
 
-The main Stage 4 data path is implemented:
+**`60bcd97` — save-driven quick race**, plus an `fflush(stdout)` in
+`debug_printf`. See §8.
 
-- The renderer has separate scene and display sizes.
-- Depth can be sampled.
-- The main pass writes `R16G16_SFLOAT` motion vectors.
-- Motion history uses actor, geometry, group, and target identity.
-- First use, old entries, 2D work, and extra same-frame passes get zero motion.
-- The projection has an eight-step Halton jitter path and keeps an unjittered form for Streamline.
-- Scene colour, depth, motion, scaling output, overlay/UI, and swapchain resources are exposed to the bridge.
+## 4. Architecture and design decisions
 
-This work is mainly in BRender commits `596aa7f`, `de04d44`, `d300c3e`, and `3840a1f`.
+### Renderer selection
+`src/harness/harness.c` parses `--vulkan` and selects `vkrend`;
+`src/harness/platforms/sdl2.c` creates the SDL Vulkan window and surface. On
+Windows with Streamline active, SDL hands the native `HWND`/`HINSTANCE` to the
+bridge so the surface is created through Streamline's hook.
 
-Stage 4 is implemented in code, but its formal acceptance test is not complete. There is no finished bindable motion-vector debug view with recorded checks for camera pan, a moving car, and zero-motion 2D layers. Treat that as the last Stage 4 gate.
+### The Vulkan driver
+`lib/BRender-v1.3.2/drivers/vkrend/` owns instance, device, swapchain, command
+buffers, sync, pipelines, descriptors, textures, geometry and scene targets. Every
+Vulkan entry point is fetched through the harness-supplied
+`vkGetInstanceProcAddr`, which is how Streamline gets interposed without the
+driver knowing about it.
 
-### Stage 5: DLSS Super Resolution
+Two decisions worth understanding before changing anything:
 
-The optional Windows Streamline bridge is present. It loads `sl.interposer.dll`, asks for DLSS, tags input colour/output colour/depth/motion, sets constants, and calls DLSS evaluation. Plain Vulkan remains the fallback when the features are not requested or do not load.
+- **Deferred destruction, not device stalls.** Retired images, buffers and
+  descriptor sets carry the frame that released them and are destroyed once that
+  frame's fence has been waited on. Reintroducing a `vkDeviceWaitIdle` on the
+  free path will silently kill frame generation (§3, `5b23b62`).
+- **The scene target is not the game's screen.** 3D goes to `scene_image`, the
+  2D/UI layer to `upload_image`. They are separate so Streamline can be given
+  scene colour, depth, motion and UI independently.
 
-Current live proof on an RTX 5060 Ti, driver 610.88:
+### The Streamline bridge
+`src/harness/streamline_bridge.cpp` (Windows, C++17) with
+`streamline_bridge_stub.c` keeping non-Streamline builds linkable, behind the C
+boundary in `src/harness/include/harness/streamline_bridge.h`. Built only when
+`DETHRACE_STREAMLINE=ON`.
 
-- Streamline 2.12 and DLSS `v310.7.0` load.
-- The scene target is 640x480 and the swapchain/output is 1280x720.
-- DLSS reports loaded and the frame contract reports `SR=on`.
+### Widescreen without touching reconstructed code
+The camera aspect is reasserted once per frame from the platform swap
+(`sdl2.c`), not at camera creation, because the game rewrites that field on every
+view change. `init.c` is deliberately untouched so `reccmp` still matches it.
+`gRearview_camera` is the wing mirror and takes its aspect from the car's mirror
+rectangle, so it is excluded.
 
-Stage 5 is not complete because there is no saved 1080p A/B image check, no ghosting check behind moving cars, and no measured FPS gain. There is also no INI or command-line DLSS setting yet; the bridge uses environment variables only.
+## 5. What works
 
-### Stage 6: DLSS Frame Generation
+- Vulkan 3D rendering: stored models, textures, ordered/translucent geometry,
+  depth, scene target, 2D composite.
+- Plain Vulkan runs clean under the validation layer with zero messages.
+- DLSS Super Resolution.
+- DLSS Frame Generation at a sustained 2x (with the caveat in §7 item 1).
+- Widescreen scene mode with an undistorted 4:3 UI.
+- Filtered opaque geometry.
+- `--quick-race-save` for reproducible test runs from a real career.
 
-The current checkpoint adds:
+## 6. What is incomplete
 
-- Streamline Win32/Vulkan surface and swapchain hook use.
-- Vulkan device features and extensions needed by the current NGX kernel.
-- Reflex setup and sleep.
-- PCL Simulation, RenderSubmit, and Present markers around the real game frame.
-- HUD-less colour tagging and DLSS-G state counters.
-- A plain Vulkan path that does not install Streamline hooks when DLSS and FG are off.
+- **Stage 4** has no motion-vector debug view, so camera/car/2D motion fields
+  have never been formally validated.
+- **Stage 5** has no saved 1080p A/B images, no ghosting check behind moving
+  cars, no measured FPS or latency table.
+- **Stage 6** has no safe FG on/off path and no proof that physics still runs at
+  host-frame speed with FG on.
+- **Settings**: DLSS and FG are environment-variable only. No INI, no CLI, no
+  in-game UI.
+- Smoke and sparks were never confirmed against the OpenGL path.
 
-DLSS-G interpolates. The SDK log reports `DLSS-G interpolation state changed from disabled to enabled (mode=sl::DLSSGMode::eOn, numFramesToGenerate=1)` and the counter reaches `presented=1372 host-presents=690`.
+## 7. Known issues, in priority order
 
-Four faults had to be fixed together to get there. All four are in the BRender submodule (`5b23b62`):
+1. **A swapchain rebuild silently turns frame generation off.** *(Found during
+   the final verification run for this handoff; not yet fixed.)*
+   `recreate_swapchain` (`devpixmp.c:307`) calls
+   `DeviceVkCreateSwapchain(..., BR_TRUE)` — vsync hardcoded — while the initial
+   creation correctly uses `s->streamline_active ? BR_FALSE : BR_TRUE`. Any
+   rebuild (window resize, or `VK_SUBOPTIMAL_KHR`/`VK_ERROR_OUT_OF_DATE_KHR`
+   from present) therefore switches to FIFO, and DLSS-G — which logs `VSync with
+   FG: not supported` on Vulkan — stops generating for the remainder of the run.
+   Observed directly: a second `VKREND: swapchain 1918x1080 ... present mode 2`
+   line followed by counter samples falling to 1:1. This is a one-line fix but
+   needs a test that deliberately resizes the window.
 
-1. `vksetup.c` put `VkPhysicalDeviceVulkan12Features` into the device `pNext` chain with `sType` left at zero. The driver skipped the struct, so `timelineSemaphore`, `descriptorIndexing` and `bufferDeviceAddress` were never actually enabled for Streamline.
-2. Freeing a model or a texture outside a scene called `vkDeviceWaitIdle`, and the "deferred" path was really a `QueueWaitIdle` at scene end. A 25-second race made **5887** such stalls, about thirteen per frame. Streamline flushes every DLSS-G worker queue on each one, so interpolation could never build up. Retired objects now carry the frame that released them and are destroyed once that frame's fence has been waited on (`DeviceVkRetireDeferred`). This also lifted the frame rate: the game now holds the 30 FPS cap where it used to sit near 21.
-3. `sl.dlss_g` registers its `vkCreateSwapchainKHR` hook when the plug-in starts up, so `DethraceStreamlineSetVulkanPhysicalDevice` now runs **before** `DeviceVkCreateSwapchain`, not after it.
-4. The Halton jitter was applied to the projection on every scene, including frames DLSS never resolved. The offset reached the screen as a sub-pixel left/right shake, clearest on distant high-contrast edges. Jitter is now gated on `streamline_sr_active`.
+2. **Sprites cannot be filtered, and bleeding will not fix it.** Colour-key
+   transparency is "RGB is black" (`textured_model.frag:59`), so colour-keyed
+   draws stay point-sampled. An attempt to convert the key to a real alpha
+   channel with RGB bled from opaque neighbours was written, tested and
+   **reverted**: black contours appeared on some pedestrian animation frames and
+   around smoke. The cause is not failed bleeding — Carmageddon's sprites were
+   drawn anti-aliased against black, so their edges contain genuinely near-black
+   texels that were never transparent under either the old shader or the new
+   one. `NEAREST` hid them at one texel wide; `LINEAR` spreads each over 2-3
+   screen pixels and they become visible outlines. Smoke shows it worst because
+   its edges are softest. Three options, none chosen:
+   (a) leave it; (b) widen the key threshold to "dark enough", which risks
+   eating legitimate dark detail and needs several rounds of visual checking;
+   (c) premultiplied alpha with real blending, which is the correct answer but
+   turns sprites from discard to blended and makes them depth-sort sensitive.
 
-Stage 6 is still not complete: image quality, a safe FG off/on path, and settings work all remain.
+3. **The FG counter mixes menu frames and produces false alarms.** The plug-in
+   is primed at startup, so loading and menu frames are counted while FG is
+   genuinely off. A run that has not reached a moving race reads
+   `presented == host-presents` and looks exactly like a broken feature. This
+   caused two false alarms in one session. Judge the **last** samples, not the
+   totals: 30 host presents becoming 60 presented is FG working. Allow 90+
+   seconds. Separating "plug-in primed" from "FG running" would remove the trap.
 
-## Current architecture
+4. **DLSS mode must be matched to the upscale ratio by hand.** Nothing checks
+   that `DETHRACE_DLSS_MODE` agrees with the scene-to-display ratio, and a large
+   mismatch gives a black frame with **no error** — `slEvaluateFeature` still
+   returns `eOk`, so the renderer blits an untouched scaling output. Either
+   derive the mode from the ratio or query `slDLSSGetOptimalSettings`.
 
-### Game and harness
+5. **World-anchored 2D markers are not re-projected.** The 2D layer holds both
+   the HUD and markers placed from world positions (damage and cop indicators).
+   The scene is wider than the 4:3 UI box, so those markers sit in the wrong
+   place. Deliberately deferred when widescreen landed.
 
-- `src/harness/harness.c` selects the platform and renderer. `--vulkan` selects `vkrend`.
-- `src/harness/platforms/sdl2.c` creates the SDL Vulkan window and surface.
-- On Windows with Streamline active, SDL gives the native `HWND` and `HINSTANCE` to the bridge so the surface is made through the Streamline hook.
-- `src/DETHRACE/common/mainloop.c` starts the Streamline frame before game input/simulation and ends the simulation marker before rendering.
+6. **Backbuffer extent is not clean.** DLSS-G logs `Invalid backbuffer resource
+   extent ... 0 x 0` and resets it to the display size.
 
-### Vulkan renderer
+7. **UI is not a true display-size alpha layer.** The 640x480 upload image is
+   not tagged as UI at 1920x1080; the DLSS output is used as HUD-less colour.
 
-- `lib/BRender-v1.3.2/drivers/vkrend/` owns the Vulkan instance, device, queues, swapchain, command buffers, frame sync, pipelines, descriptors, textures, geometry, and scene targets.
-- `devpixmp.c` owns acquire, command recording, Streamline evaluation, submit, and present.
-- `renderer.c`, `cache.c`, and `gstored.c` build the scene constants, jittered and unjittered matrices, and object motion history.
-- The current path renders the old game scene at 640x480 and can present at a larger display size.
+8. **Camera planes are hardcoded** in the bridge at near 0.1 / far 10000
+   instead of the real BRender values.
 
-### Streamline bridge
+9. **Validation is off under Streamline**, because its virtual swapchain
+   resources produce false positives. Always keep a separate plain Vulkan
+   validation run — it is currently clean and should stay that way.
 
-- `src/harness/streamline_bridge.cpp` is the Windows C++17 bridge.
-- `src/harness/streamline_bridge_stub.c` keeps non-Streamline builds linkable.
-- `src/harness/include/harness/streamline_bridge.h` is the C boundary used by the game and BRender.
-- Frame resources are passed as small C records. The bridge turns them into Streamline Vulkan resources and uses frame-based resource tags.
-- Streamline is built only when `DETHRACE_STREAMLINE=ON`. Other builds use the stub.
+10. **Three `sl.common` Vulkan hooks report unsupported** (`CmdBindPipeline`,
+    `CmdBindDescriptorSets`, `BeginCommandBuffer`). Adding
+    `eDisableCLStateTracking` did not remove them. FG works regardless; the
+    reason is unexplained.
 
-## Pending checkpoint changes and why they exist
+11. **Only save slot 0 is loadable** with the shipped data.
+    `LoadSavedGames()` rejects any file whose size is not `sizeof(tSave_game)`
+    (948 bytes); `SAVE1`..`SAVE9` are 1464 bytes. Pre-existing, not caused by
+    this branch.
 
-### Root repository
+### Traps that cost real time — do not repeat
 
-- `src/DETHRACE/common/mainloop.c`
-  - Adds BeginFrame and EndSimulation calls around the real game simulation.
-  - This gives Reflex/PCL the right frame order instead of starting only inside rendering.
-- `src/harness/include/harness/streamline_bridge.h`
-  - Adds Win32 surface creation and game-frame lifecycle entry points.
-- `src/harness/platforms/sdl2.c` and `sdl2_syms.h`
-  - Read SDL native Win32 window data and make the Vulkan surface through Streamline when active.
-- `src/harness/streamline_bridge.cpp`
-  - Adds Reflex functions, frame state, PCL lifecycle, DLSS-G counters, delayed state reads, frame-aware tags, and optional verbose logs.
-  - Uses the display-size DLSS output as HUD-less colour when SR is on.
-  - Avoids loading the Vulkan interposer when neither SR nor FG was asked for.
+- **`sl::Constants::renderingGameFrames` does not exist in Streamline 2.12.** It
+  appears only in the SDK's own stale `docs/`, not in `include/sl_consts.h`.
+  Setting it does not compile. Trust the headers over the bundled docs.
+- **Do not call `slSetVulkanInfo`.** `sl_helpers_vk.h:250` restricts it to hosts
+  that do *not* use Streamline's device/instance proxies, and `vksetup.c` does
+  use them.
+- **Do not free descriptor sets from an earlier generation.**
+  `DeviceVkSceneDestroy` destroys and rebuilds the pool — that is what
+  `texture_descriptor_generation` signals — so those handles name a pool that no
+  longer exists. Freeing them crashes intermittently, well after the fact. It
+  cost a bisect to find.
+- **Do not read `renderer->state.current` unconditionally for a draw's
+  material.** For geometry with no material it picks up whatever colour map the
+  current state holds, which can outlive the `br_buffer_stored` it names.
+  Crashes on an access violation.
 
-### BRender submodule (`15d62bd`)
+## 8. Build, run, test, verify
 
-- `drivers/vkrend/devpixmp.c`
-  - Keeps validation on for plain Vulkan and turns it off for the hooked Streamline path because Streamline virtual swapchain work gives false validation messages.
-  - Recreates the probe surface through Streamline after device creation.
-  - Moves PCL markers to match the real command-buffer, queue-submit, and queue-present order.
-  - Sets FG state before command recording and reads it on the next frame.
-- `drivers/vkrend/vksetup.c`
-  - Adds `VK_NVX_binary_import`, `VK_NVX_image_view_handle`, and `VK_KHR_buffer_device_address` when supported and needed by Streamline.
-  - Adds Vulkan 1.2 feature checks for timeline semaphores, descriptor indexing, and buffer device address.
-
-## Known faults and likely causes
-
-Work in this order. These are direct integration faults, not image-quality tuning items.
-
-1. **Backbuffer extent is not clean.** DLSS-G logs `Invalid backbuffer resource extent ... 0 x 0` and resets it to 1280x720. Restore a correct display extent for the virtual backbuffer path without giving Streamline a false resource handle.
-2. **UI input is not yet a true display-size alpha layer.** The current 640x480 upload image is not tagged as UI when output is 1280x720. The DLSS output is used as HUD-less colour. Before FG can be called visually correct, make and tag a display-size UI colour+alpha layer or prove the current composite order is safe.
-3. **Camera planes are hard-coded.** The bridge uses near 0.1 and far 10000. Pass the real BRender camera values before final DLSS image tests.
-4. **FG toggles without recreating the swapchain.** `DethraceStreamlineSetFrameGenerationActive` flips DLSS-G between `eOn` and `eOff` as `scene_has_content` changes, so the SDK logs `DLSS-G interpolation state changed` several times a run. The DLSS-G guide, section 18.0, says the swapchain should be recreated on every such change.
-5. **Startup priming makes the FG counter mix menu frames.** `DethraceStreamlineSetVulkanPhysicalDevice` calls `slDLSSGSetOptions(eOn)` to force plug-in startup before the swapchain exists, and it sets `fg_runtime_on` at the same time. The counter therefore also counts menu frames, where FG is genuinely off, so a run that never reaches a race reads `presented == host-presents` and looks like a failure. It also produces `Repeated slDLSSGSetOptions() call for the frame N` warnings. Separate "plug-in primed" from "FG running".
-6. **Three `sl.common` Vulkan hooks stay unsupported.** The SDK logs `Hook sl.common:Vulkan:CmdBindPipeline / CmdBindDescriptorSets / BeginCommandBuffer is NOT supported`. Adding `eDisableCLStateTracking` to the preference flags did not remove them. FG works anyway, so this is not blocking, but it is unexplained.
-7. **Validation is off under Streamline.** This is a known limit caused by its virtual swapchain resources. Always keep a separate plain Vulkan validation run.
-8. **No runtime settings UI.** DLSS and FG are environment-only. The planned INI/CLI controls and safe live toggle do not exist.
-9. **Stage 4 and visual proof remain open.** Add the motion debug view, then save HD A/B frames and check smoke, sparks, mirror, map, fog, translucency, moving-car trails, and HUD stability.
-10. **Colour-key transparency blocks filtering on sprites.** Transparency is "RGB is black" (`textured_model.frag`), not an alpha channel, so colour-keyed draws cannot be linearly filtered without a dark halo appearing at every sprite edge and mip levels averaging the key in. They are point sampled as a result. The fix is to build a real alpha channel in `upload_texture` -- index 0 to `alpha = 0`, with RGB bled from neighbouring texels so interpolation never pulls black in -- and alpha-test at 0.5 in the shader. Everything could then filter, sprites included.
-11. **World-anchored 2D markers are not re-projected.** The 2D layer holds both the HUD and markers placed from world positions (damage and cop indicators). The scene is now wider than the 4:3 UI box, so those markers sit in the wrong place. Agreed as follow-up work, deliberately not addressed when widescreen landed.
-12. **DLSS mode must be matched to the upscale ratio by hand.** Nothing checks that `DETHRACE_DLSS_MODE` agrees with scene-to-display ratio. A large mismatch, such as a 640x480 scene at 1920x1080 output on `quality`, gives a black frame with no error: `slEvaluateFeature` still returns `eOk`, so the renderer blits an untouched scaling output. Either derive the mode from the ratio or query `slDLSSGetOptimalSettings`.
-
-### Fixed since the last handoff
-
-- **Every pedestrian wore the same sprite** and switched to it as soon as its animation advanced. An ordered draw is queued while the model is walked and flushed only after every model has been walked, but `StoredVkRenderGroup` read the material from `vk_group_info`, which lives on the geometry rather than the draw. Carmageddon gives every pedestrian the same `br_material` and swaps its colour map per pedestrian, so by flush time that one stored state held only the last pedestrian's sprite. The queued primitive now folds the resolved material into the state snapshot it already takes, and the state each draw should use is passed explicitly. Fixed in BRender `1322d89`.
-  - Worth knowing: reading `renderer->state.current` unconditionally instead **crashes**. For geometry with no material it picks up whatever colour map the current state holds, which can outlive the `br_buffer_stored` it names.
-- **Opaque textures are now filtered.** The game never asks for filtering, so every surface used to be point sampled at mip 0 and the mip chain built on upload was never read. Vulkan now uses linear, full mips and max anisotropy for opaque draws. Beyond sharpness this removes distant shimmer, which was temporal noise DLSS could not settle. `--vulkan` deliberately no longer matches the software and OpenGL look. Fixed in BRender `797f3d0`.
-  - Colour-keyed draws stay point sampled, and must until the key becomes a real alpha channel. See the open item below.
-- **Texture descriptor sets are handed back.** They came from a 16384-set pool created with `FREE_DESCRIPTOR_SET_BIT`, but `vkFreeDescriptorSets` was called nowhere, so every texture resize orphaned up to four sets permanently. When the pool ran dry `BufferStoredVkBind` failed and the draw was skipped, which would show as textured objects going missing. Sets now retire against the frame fence like images and buffers. Measured over a 120-second race the live count sits flat at 147 instead of climbing. Fixed in BRender `8540bf3`.
-  - Only sets belonging to the pool currently alive may be freed. `DeviceVkSceneDestroy` tears the pool down and builds a new one -- that is what `texture_descriptor_generation` signals -- and a texture left behind by that carries handles into a pool that no longer exists. Freeing those crashes intermittently, well after the fact. It cost a bisect to find; do not remove that guard.
-
-### Corrections to earlier handoff text
-
-Two items in the previous list were wrong and have been dropped:
-
-- **`sl::Constants::renderingGameFrames` does not exist in Streamline 2.12.** It appears only in the SDK's stale `docs/ProgrammingGuide.md:1210` and `docs/ProgrammingGuideDLSS_G.md:932`; the shipped `include/sl_consts.h` has no such field. Setting it would not compile.
-- **`slSetVulkanInfo` must not be called here.** `include/sl_helpers_vk.h:250` says it is only for hosts that do **not** use Streamline's `vkCreateDevice` / `vkCreateInstance` proxies, and `vksetup.c` fetches every entry point through the interposer, so it does use them. The real ordering fault was that `slIsFeatureLoaded` needs the device first (`include/sl_core_api.h:117`); those checks now run in `DethraceStreamlineSetVulkanPhysicalDevice`.
-
-## Build setup
-
-The checked build directory is `cmake-build-streamline`:
-
-- Generator: Ninja
-- Build type: Release
-- C compiler: CLion MinGW GCC
-- C++ compiler: CLion MinGW G++
-- `DETHRACE_STREAMLINE=ON`
-- `DETHRACE_STREAMLINE_ROOT=C:/Temp/dethrace-streamline-sdk`
-
-Configure from PowerShell:
+### Configure and build
 
 ```powershell
 cmake -S . -B cmake-build-streamline -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DDETHRACE_STREAMLINE=ON `
   -DDETHRACE_STREAMLINE_ROOT=C:/Temp/dethrace-streamline-sdk
-```
-
-Build:
-
-```powershell
 cmake --build cmake-build-streamline --parallel 8
 ```
 
-The output directory must contain the matching Streamline 2.12 plug-ins and NGX DLLs. The current directory has `sl.interposer.dll`, `sl.common.dll`, `sl.dlss.dll`, `sl.dlss_g.dll`, `sl.pcl.dll`, `sl.reflex.dll`, `nvngx_dlss.dll`, `nvngx_dlssg.dll`, `_nvngx.dll`, and `NvLowLatencyVk.dll`.
+Toolchain: Ninja, Release, CLion MinGW GCC/G++. The output directory must hold
+the matching Streamline 2.12 plug-ins and NGX DLLs (`sl.interposer.dll`,
+`sl.common.dll`, `sl.dlss.dll`, `sl.dlss_g.dll`, `sl.pcl.dll`, `sl.reflex.dll`,
+`nvngx_dlss.dll`, `nvngx_dlssg.dll`, `_nvngx.dll`, `NvLowLatencyVk.dll`); the
+build copies them. The SDK and those DLLs are local build inputs, are not
+tracked here, and are subject to NVIDIA licence and attribution terms before
+shipping.
 
-The SDK and copied DLLs are local build inputs. They are not tracked by this repository. Check NVIDIA licence and attribution rules before shipping them.
+The `cmake-build-stage3-debug` directory currently **fails to build** on the
+`dethrace.rc` resource step (`CreateProcess failed`), so there is no working
+symbolised build. That made one crash this session much harder to diagnose than
+it needed to be; fixing it is worth an hour.
 
-## Run and check
+### Tests
 
-Game data is in the untracked `Carma/` directory.
+```powershell
+ctest --test-dir cmake-build-tests --output-on-failure
+```
 
-`--quick-race-save[=slot]` restores a saved career before the race starts, so a test run gets the upgraded car, credits, power-ups and opponents instead of the stock first car. It is enough on its own; without an explicit `--quick-race` the race comes from the save. Only slot 0 loads with the shipped data, because `LoadSavedGames()` rejects any file whose size is not `sizeof(tSave_game)` (948 bytes) and `SAVE1`..`SAVE9` are 1464.
+Note the directory: `cmake-build-streamline` registers **no** tests. Neither
+suite covers the Vulkan or Streamline paths — all renderer verification is by
+live run.
 
-Plain Vulkan fallback:
+### Run
+
+Plain Vulkan, validation layer active:
 
 ```powershell
 $env:DETHRACE_ROOT_DIR = "$PWD\Carma"
 $env:DETHRACE_STREAMLINE = "0"
 .\cmake-build-streamline\dethrace.exe --vulkan --window `
-  --window-width=1280 --window-height=720 --quick-race=0 --fps=30 `
+  --window-width=1280 --window-height=720 --quick-race-save `
   -nosound -nocutscenes
 ```
 
-DLSS Quality plus FG request:
-
-```powershell
-$env:DETHRACE_ROOT_DIR = "$PWD\Carma"
-$env:DETHRACE_STREAMLINE = "1"
-$env:DETHRACE_DLSS = "1"
-$env:DETHRACE_DLSSG = "1"
-$env:DETHRACE_DLSS_MODE = "quality"
-$env:DETHRACE_STREAMLINE_DEBUG = "0"
-.\cmake-build-streamline\dethrace.exe --vulkan --window `
-  --window-width=1280 --window-height=720 --quick-race=0 --fps=30 `
-  -nosound -nocutscenes
-```
-
-Widescreen scene, 960x540 upscaled to 1920x1080 by a whole factor of 2:
+Widescreen + DLSS + FG, 960x540 upscaled 2x to 1920x1080:
 
 ```powershell
 $env:DETHRACE_ROOT_DIR = "$PWD\Carma"
 $env:DETHRACE_VULKAN_SCENE_SIZE = "960x540"
-$env:DETHRACE_STREAMLINE = "1"
-$env:DETHRACE_DLSS = "1"
-$env:DETHRACE_DLSSG = "1"
+$env:DETHRACE_STREAMLINE = "1"; $env:DETHRACE_DLSS = "1"; $env:DETHRACE_DLSSG = "1"
 $env:DETHRACE_DLSS_MODE = "performance"
 .\cmake-build-streamline\dethrace.exe --vulkan --window `
-  --window-width=1920 --window-height=1080 --quick-race=0 --fps=30 `
-  -nosound -nocutscenes
+  --window-width=1920 --window-height=1080 --quick-race-save `
+  -nosound -nocutscenes 2> fg.log
 ```
 
-`DETHRACE_VULKAN_SCENE_SIZE` decouples the 3D scene from the game's 640x480 screen. The scene aspect also becomes the forward cameras' aspect, giving Hor+ widescreen, and the 2D layer is centred at its own 4:3 shape rather than stretched. Match `DETHRACE_DLSS_MODE` to the ratio: 2x is `performance`, 3x is `ultra-performance`, 1.5x is `quality`. A ratio far from the chosen mode is what produced a black frame at 1920x1080 from a 640x480 scene.
+Match the mode to the ratio: 2x is `performance`, 3x `ultra-performance`,
+1.5x `quality`.
 
-Useful bridge controls:
+Settings, all environment variables:
 
-- `DETHRACE_DLSS_MODE=quality|balanced|performance|ultra-performance|dlaa`
-- `DETHRACE_STREAMLINE_DEBUG=1` for full SDK messages
-- `DETHRACE_STREAMLINE_CONSOLE=1` for the Streamline console
-- `DETHRACE_STREAMLINE_PATH=<path>` to load another interposer
-- `DETHRACE_STREAMLINE_APP_ID` and `DETHRACE_STREAMLINE_PROJECT_ID` for approved app data
+| Variable | Meaning |
+|---|---|
+| `DETHRACE_VULKAN_SCENE_SIZE` | `<w>x<h>` 3D scene size; also sets camera aspect |
+| `DETHRACE_VULKAN_RENDER_SCALE` | older uniform down-scale, 0.5-1.0 |
+| `DETHRACE_STREAMLINE` | master on/off for the bridge |
+| `DETHRACE_DLSS` / `DETHRACE_DLSSG` | Super Resolution / Frame Generation |
+| `DETHRACE_DLSS_MODE` | `quality`/`balanced`/`performance`/`ultra-performance`/`dlaa` |
+| `DETHRACE_STREAMLINE_DEBUG` | full SDK logging |
+| `DETHRACE_STREAMLINE_CONSOLE` | Streamline console |
+| `DETHRACE_STREAMLINE_PATH` | alternate interposer |
+| `DETHRACE_STREAMLINE_APP_ID` / `_PROJECT_ID` | approved application identity |
 
-## Validation done for this handoff
+`--quick-race-save[=slot]` restores a saved career before the race so a test run
+gets the upgraded car, credits, power-ups and opponents. It is sufficient on its
+own — without an explicit `--quick-race` the race comes from the save.
 
-### Build
+### Verification results recorded at handoff
 
-Command:
+All run on the state being handed over (root `7430f40`, BRender `8540bf3`).
 
-```text
-cmake --build cmake-build-streamline --parallel 8
-```
+| Check | Command | Result |
+|---|---|---|
+| Build | `cmake --build cmake-build-streamline --parallel 8` | exit 0, `ninja: no work to do` |
+| Tests (streamline dir) | `ctest --test-dir cmake-build-streamline` | exit 0, `No tests were found!!!` |
+| Tests (tests dir) | `ctest --test-dir cmake-build-tests --output-on-failure` | exit 0, `1/1 test_dethrace Passed`, 100% |
+| Plain Vulkan, 75 s | see above | Survived. 7 `VKREND:` lines, **zero validation messages**. |
+| DLSS + FG, 95 s | see above | Survived. `frame contract SR=on FG=on Reflex=on PCL=on mask=3`. Scene 960x540, swapchain 1920x1080. |
 
-Result: exit 0, `ninja: no work to do`. Ninja considers the current source built.
+The DLSS+FG run also **reproduced known issue 1**: a mid-run
+`VKREND: swapchain 1918x1080 ... present mode 2` followed by counter samples
+falling to 1:1 (`presented=4117 host-presents=2760` overall, 1.49x, with the
+final intervals flat). Frame generation was working earlier in the same run.
+Treat that log line as the signature of the bug.
 
-### CTest
+## 9. Intentionally uncommitted
 
-`ctest --test-dir cmake-build-streamline` reports `No tests were found!!!`; that build registers no tests. The separate `cmake-build-tests` directory does: `ctest --test-dir cmake-build-tests` runs `test_dethrace` and it passes. Neither covers the Vulkan or Streamline paths.
+These are local inputs, not part of the branch, and must not be added:
 
-### Plain Vulkan live check
+- `Carma/` — game data, required to run.
+- `SDL2-2.32.8/` — local SDL source/package.
+- `cmake/zig-toolchain.cmake` — local toolchain file.
+- `voxels/` — unrelated user files.
 
-Run time: 30 seconds at 1280x720 with a 640x480 scene target, validation layer on. The process was stopped by the check, so its exit code came from the kill, not a crash. Vulkan made the device, swapchain, 2D upload image, and 3D scene target, and produced **no validation messages at all**. The old `vk12.sType` error is gone.
+## 10. Current objective and next tasks
 
-### DLSS + FG live check
+**Objective:** frame generation works but is not yet trustworthy or shippable.
+Move it from "demonstrated once" to "holds up across a full race", then close
+the Stage 4/5/6 image-quality gates.
 
-Run time: 35 seconds on NVIDIA GeForce RTX 5060 Ti, driver 610.88. Results:
+1. **Fix the vsync-on-rebuild bug (§7.1).** One line in `recreate_swapchain`,
+   but add a test that resizes the window mid-race. This is top of the list
+   because it silently disables the branch's headline feature.
+2. **Separate "plug-in primed" from "FG running" (§7.3)** so the counter stops
+   producing false alarms and can be trusted in automation.
+3. **Repair the debug build** (`dethrace.rc` step) so crashes give symbols.
+4. **Recreate the swapchain when FG is toggled**, per the DLSS-G guide §18, and
+   prove the simulation still runs at host-frame speed with FG on.
+5. **Give FG a correct display-size HUD-less/UI contract (§7.6, §7.7)** and pass
+   real camera planes (§7.8).
+6. **Decide the sprite-filtering question (§7.2)** — option (c), premultiplied
+   alpha, is the only real fix and deserves its own session.
+7. **Finish the Stage 4 motion-vector debug view** and validate camera, car and
+   2D motion fields.
+8. **Capture Stage 5 evidence**: 1080p A/B images, ghosting behind moving cars,
+   FPS and latency table.
+9. **Re-project world-anchored 2D markers for widescreen (§7.5).**
+10. **Add INI/CLI settings**, fallback tests, licence text and shipping docs.
 
-- DLSS loaded: yes; DLSS-G loaded: yes; requirement results 0
-- Frame contract: `SR=on FG=on Reflex=on PCL=on mask=3`
-- Scene target 640x480, swapchain 1280x720, mailbox present mode
-- Last counter: `presented=1372 host-presents=690 max-generated=5`
-- SDK log: `DLSS-G interpolation state changed from disabled to enabled (mode=sl::DLSSGMode::eOn, numFramesToGenerate=1)`
+## 11. Files to read first
 
-Interpolation is running at a clean 2x. Repeated across three separate runs.
+| File | Why |
+|---|---|
+| `lib/BRender-v1.3.2/drivers/vkrend/devpixmp.c` | frame targets, acquire/submit/present, Streamline evaluation. Bug §7.1 is at line 307. |
+| `lib/BRender-v1.3.2/drivers/vkrend/vkscene.c` | scene targets, deferred retirement, samplers, overlay compositing |
+| `lib/BRender-v1.3.2/drivers/vkrend/sbuffer.c` | texture upload, colour key, descriptor sets, sampler choice |
+| `lib/BRender-v1.3.2/drivers/vkrend/gstored.c` | stored-model draws, ordered-draw material handling |
+| `lib/BRender-v1.3.2/drivers/vkrend/gv1buckt.c` | ordered-draw flush; pairs with `gstored.c` |
+| `lib/BRender-v1.3.2/drivers/vkrend/renderer.c` | scene setup, jitter, Streamline camera constants |
+| `lib/BRender-v1.3.2/drivers/vkrend/vksetup.c` | instance/device/swapchain creation, feature chain |
+| `lib/BRender-v1.3.2/drivers/vkrend/textured_model.frag` | colour key and fog; central to §7.2 |
+| `src/harness/streamline_bridge.cpp` | Streamline load, options, tags, Reflex, PCL, telemetry |
+| `src/harness/render_config.c` | scene size override and widescreen camera aspect |
+| `src/harness/platforms/sdl2.c` | Vulkan surface, Win32 hook, per-frame aspect reassert |
+| `src/DETHRACE/common/newgame.c` | `QuickRaceStart`, save-driven quick race |
+| `VK-PLAN.md` | staged design and acceptance criteria |
+| `docs/RENDERING_PIPELINE.md` | renderer design notes |
 
-**Read the counter carefully.** The plug-in is primed at startup, so menu and loading frames are counted too, and FG is genuinely off for those. A run that has not reached a moving race reads `presented == host-presents` and looks exactly like a broken feature. This has produced a false alarm twice. Judge it on the *last* few samples rather than the totals: 30 host presents turning into 60 presented is FG working, whatever the running total says. Allow 90 seconds; 60 is not always enough for a save-loaded race to get going.
-
-### Control sample
-
-NVIDIA's `vk_streamline` sample was built earlier with the same SDK and machine. It gave 53 presented frames for 30 host presents, so the GPU, driver, SDK, and Vulkan FG path can work. Local paths were `C:\Temp\vk_streamline` and `C:\Temp\bin_x64\Release\official_sl.log`. These are temporary files and may be removed later.
-
-### Diff checks and secret review
-
-- Root `git diff --check`: pass before commit; only LF-to-CRLF warnings.
-- BRender `git diff --check`: pass before commit; only LF-to-CRLF warnings.
-- Added tracked lines: no common secret or private-key patterns found.
-- Untracked names: no common secret-key file names found.
-
-## Untracked files left on purpose
-
-Do not add or remove these without the user's order:
-
-- `Carma/` - 3423 game-data files used to run the game.
-- `SDL2-2.32.8/` - 440 local SDL source/package files.
-- `cmake/zig-toolchain.cmake` - one local toolchain file.
-- `voxels/` - 32 user files.
-
-These are not part of the Vulkan/DLSS checkpoint and remain uncommitted.
-
-## Next work, in order
-
-1. Confirm by eye that the left/right shake is gone, in both plain Vulkan and DLSS mode. The jitter gate is a code fix that has not yet had a visual check.
-2. Fix the 0x0 backbuffer extent warning and give FG a correct display-size HUD-less/UI contract.
-3. Recreate the swapchain when FG is switched on or off, and show that game physics still runs at host-frame speed.
-4. Separate plug-in priming from FG runtime state so the counter measures only frames where FG is really on.
-5. Pass the real BRender near/far planes instead of the hard-coded 0.1 / 10000.
-6. Finish the Stage 4 motion-vector debug view and validate camera, car, and 2D motion fields.
-7. Save DLSS Quality 1080p A/B images, inspect moving-car trails and HUD stability, and record FPS and latency.
-8. Add INI/CLI settings, fallback tests, licence text, and shipping documentation.
-
-## Important files to inspect first
-
-- `src/harness/streamline_bridge.cpp` - Streamline load, options, constants, tags, Reflex, PCL, and telemetry.
-- `src/harness/include/harness/streamline_bridge.h` - C frame/resource contract.
-- `src/DETHRACE/common/mainloop.c` - simulation marker placement.
-- `src/harness/platforms/sdl2.c` and `sdl2_syms.h` - SDL/Win32 surface hook.
-- `lib/BRender-v1.3.2/drivers/vkrend/vksetup.c` - Vulkan feature and extension chain; first bug is here.
-- `lib/BRender-v1.3.2/drivers/vkrend/devpixmp.c` and `devpixmp.h` - frame targets, resource tags, command submit, and present.
-- `lib/BRender-v1.3.2/drivers/vkrend/renderer.c` - scene setup and Streamline camera data.
-- `lib/BRender-v1.3.2/drivers/vkrend/cache.c` - projection conversion and jitter.
-- `lib/BRender-v1.3.2/drivers/vkrend/gstored.c` - stored-model draw and motion history use.
-- `lib/BRender-v1.3.2/drivers/vkrend/brender.vert.glsl` and `brender.frag.glsl` - motion-vector output.
-- `CMakeLists.txt` - optional Streamline build.
-- `VK-PLAN.md` - stage rules and acceptance checks.
-- `docs/RENDERING_PIPELINE.md` - renderer design notes.
-
-## Current objective
-
-DLSS-G now creates real generated frames, so the objective moves from "make it run" to "make it look right". Next: confirm the shake fix by eye, give FG a correct display-size HUD-less/UI contract, recreate the swapchain on FG toggles, then close the Stage 4/5/6 visual checks with saved HD A/B frames and an FPS and latency table.
+A closing note on method: several bugs this session presented as one thing and
+were another — the "validation warning" that was actually disabling GPU
+features, the sprite bug that was in ordered-draw state rather than textures, the
+sprite outlines that were in the source art rather than in filtering. The runs
+that settled them were cheap A/B tests (old commit vs new, OpenGL vs Vulkan,
+override on vs off). Reach for those before reading more code.
