@@ -15,6 +15,7 @@
 #include "input.h"
 #include "intrface.h"
 #include "loading.h"
+#include "loadsave.h"
 #include "network.h"
 #include "pd/sys.h"
 #include "racestrt.h"
@@ -1915,6 +1916,8 @@ int DoMultiPlayerStart(void) {
 // harness_game_config.quick_race so renderer benchmarks and reference captures
 // are reproducible instead of depending on scripted menu input.
 void QuickRaceStart(int pRace_index, int pSkill_level) {
+    int slot;
+
     gProgram_state.frank_or_anniness = eFrankie;
     gProgram_state.skill_level = pSkill_level;
 
@@ -1923,6 +1926,35 @@ void QuickRaceStart(int pRace_index, int pSkill_level) {
     }
 
     StartLoadingScreen();
+
+    // Restoring a save first gives a test run a real career state -- an upgraded
+    // car, credits, power-ups and the opponents that go with it -- instead of the
+    // stock first car. LoadTheGame() already ends in InitGame(), so the fresh-car
+    // path below is skipped entirely when a save is used.
+    slot = harness_game_config.quick_race_save_slot;
+    if (slot >= 0) {
+        LoadSavedGames();
+        if (gSaved_games[slot] != NULL) {
+            int saved_race_index = gSaved_games[slot]->current_race_index;
+            int race_index = harness_game_config.quick_race_index_explicit ? pRace_index : saved_race_index;
+
+            LOG_INFO3("Quick race restoring save slot %d, race %d", slot, race_index);
+            LOG_INFO3("  car '%s', credits %d", gSaved_games[slot]->car_name,
+                gSaved_games[slot]->credits);
+
+            // LoadTheGame() takes the race from the save, so lend it the index we
+            // actually want and put the save back afterwards.
+            gSaved_games[slot]->current_race_index = race_index;
+            gNet_mode = eNet_mode_none;
+            LoadTheGame(slot);
+            gSaved_games[slot]->current_race_index = saved_race_index;
+            DisposeSavedGames();
+            return;
+        }
+        LOG_WARN2("Save slot %d is empty, starting the quick race with a fresh car", slot);
+        DisposeSavedGames();
+    }
+
     AboutToLoadFirstCar();
     SwitchToRealResolution();
     LoadCar(

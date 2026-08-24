@@ -72,6 +72,13 @@ typedef struct tHarness_game_config {
     // capturing reproducible reference screenshots.
     int quick_race;
     int quick_race_skill;
+    // Slot to restore before the quick race starts, so a test run gets the car,
+    // credits, power-ups and opponents from a saved career instead of a fresh
+    // start. -1 disables it.
+    int quick_race_save_slot;
+    // Set when --quick-race named a race explicitly. Without it a restored save
+    // races wherever the career had got to, which is usually what you want.
+    int quick_race_index_explicit;
 
     int install_signalhandler;
     int no_bind;

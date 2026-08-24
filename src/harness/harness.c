@@ -295,6 +295,7 @@ int Harness_Init(int* argc, char* argv[]) {
     // go through the normal front-end unless a quick race is explicitly requested
     harness_game_config.quick_race = -1;
     harness_game_config.quick_race_skill = 1;
+    harness_game_config.quick_race_save_slot = -1;
     // no volume multiplier
     harness_game_config.volume_multiplier = 1.0f;
     // start in fullscreen mode
@@ -428,12 +429,29 @@ int Harness_ProcessCommandLine(int* argc, char* argv[]) {
             consumed = 1;
         } else if (strcasecmp(argv[i], "--quick-race") == 0) {
             harness_game_config.quick_race = 0;
+            harness_game_config.quick_race_index_explicit = 1;
             LOG_INFO("Quick race enabled, starting race 0");
             consumed = 1;
         } else if (strstr(argv[i], "--quick-race=") != NULL) {
             char* s = strstr(argv[i], "=");
             harness_game_config.quick_race = atoi(s + 1);
+            harness_game_config.quick_race_index_explicit = 1;
             LOG_INFO2("Quick race enabled, starting race %d", harness_game_config.quick_race);
+            consumed = 1;
+        } else if (strcasecmp(argv[i], "--quick-race-save") == 0 || strstr(argv[i], "--quick-race-save=") != NULL) {
+            char* s = strstr(argv[i], "=");
+            int slot = s != NULL ? atoi(s + 1) : 0;
+            if (slot >= 0 && slot < 8) {
+                harness_game_config.quick_race_save_slot = slot;
+                // Enough on its own: without an explicit --quick-race the restored
+                // career's own race is used.
+                if (harness_game_config.quick_race < 0) {
+                    harness_game_config.quick_race = 0;
+                }
+                LOG_INFO2("Quick race will restore save slot %d", slot);
+            } else {
+                LOG_WARN2("Save slot %d is out of range 0-7, ignoring", slot);
+            }
             consumed = 1;
         } else if (strstr(argv[i], "--skill=") != NULL) {
             char* s = strstr(argv[i], "=");

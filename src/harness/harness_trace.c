@@ -17,6 +17,10 @@ void debug_printf(const char* fmt, const char* fn, const char* fmt2, ...) {
     va_end(ap);
 
     puts("\033[0m");
+    /* stdout is fully buffered when redirected to a file or pipe, so a run that
+     * is stopped rather than exited loses every line. Test harnesses do exactly
+     * that. */
+    fflush(stdout);
 }
 
 void panic_printf(const char* fmt, const char* fn, const char* fmt2, ...) {
