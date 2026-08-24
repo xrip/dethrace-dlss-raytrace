@@ -28,18 +28,17 @@ reference for the acceptance criteria.
 
 - Repository: `C:\Users\xr1p\CLionProjects\dethrace-vulkan`
 - Branch: `feature/vulkan-renderer`
-- Root HEAD: `7430f40`
-- BRender submodule: `8540bf3`, branch `feature/vulkan-renderer`
-- Working tree clean apart from four deliberately untracked directories (§9).
+- Root HEAD: current `feature/vulkan-renderer` handoff commit
+- BRender submodule: `9253832`, branch `feature/vulkan-renderer`
+- The current fix and its live check are not committed yet (§9).
 
-**DLSS Frame Generation works.** Measured this session on an RTX 5060 Ti,
+**DLSS Frame Generation works.** Measured on an RTX 5060 Ti,
 driver 610.88, Streamline 2.12, DLSS `v310.7.0`: a 960x540 scene upscaled to
 1920x1080 reaches a clean 2x — 30 host presents producing 60 presented frames,
 sustained. This was the branch's main open goal and it is now met.
 
-It is not, however, robust: see §7 item 1, a bug found during the final
-verification run, where a swapchain rebuild silently turns frame generation off
-for the rest of the session.
+The current working tree also keeps frame generation active across a deliberate
+swapchain rebuild. See §8 for the live resize result.
 
 ## 3. What changed in this session, and why
 
@@ -131,6 +130,19 @@ read `camera->aspect`, so they follow automatically.
 **`60bcd97` — save-driven quick race**, plus an `fflush(stdout)` in
 `debug_printf`. See §8.
 
+### Current working tree after takeover
+
+**Swapchain rebuild keeps the Streamline VSync rule.** `recreate_swapchain`
+now passes `s->streamline_active ? BR_FALSE : BR_TRUE`, the same rule as first
+creation. `tools/verify_streamline_resize.ps1` starts the proven 2x setup,
+changes the window client width by two pixels, and checks the rebuilt present
+mode and the later DLSS-G counter delta.
+
+**Vulkan lighting and shadow baseline.** The legacy projected car shadow is
+working again. Vulkan model and textured-model shaders now apply a small
+per-pixel ambient/directional term to 3D materials. The experimental contact
+shadow pass remains disabled until its depth sampling is made stable.
+
 ## 4. Architecture and design decisions
 
 ### Renderer selection
@@ -175,9 +187,11 @@ rectangle, so it is excluded.
   depth, scene target, 2D composite.
 - Plain Vulkan runs clean under the validation layer with zero messages.
 - DLSS Super Resolution.
-- DLSS Frame Generation at a sustained 2x (with the caveat in §7 item 1).
+- DLSS Frame Generation at a sustained 2x, including after a swapchain rebuild.
 - Widescreen scene mode with an undistorted 4:3 UI.
 - Filtered opaque geometry.
+- Legacy projected shadows for cars.
+- Per-pixel ambient/directional lighting for Vulkan 3D models.
 - `--quick-race-save` for reproducible test runs from a real career.
 
 ## 6. What is incomplete
@@ -191,20 +205,19 @@ rectangle, so it is excluded.
 - **Settings**: DLSS and FG are environment-variable only. No INI, no CLI, no
   in-game UI.
 - Smoke and sparks were never confirmed against the OpenGL path.
+- Contour shadows for arbitrary world models are not implemented yet; the
+  contact-shadow prototype is kept disabled because it produced false dark
+  outlines.
+- `docs/RENDERING_PIPELINE.md:84-87` is stale: it still says Streamline and
+  DLSS evaluation are not present.
 
 ## 7. Known issues, in priority order
 
-1. **A swapchain rebuild silently turns frame generation off.** *(Found during
-   the final verification run for this handoff; not yet fixed.)*
-   `recreate_swapchain` (`devpixmp.c:307`) calls
-   `DeviceVkCreateSwapchain(..., BR_TRUE)` — vsync hardcoded — while the initial
-   creation correctly uses `s->streamline_active ? BR_FALSE : BR_TRUE`. Any
-   rebuild (window resize, or `VK_SUBOPTIMAL_KHR`/`VK_ERROR_OUT_OF_DATE_KHR`
-   from present) therefore switches to FIFO, and DLSS-G — which logs `VSync with
-   FG: not supported` on Vulkan — stops generating for the remainder of the run.
-   Observed directly: a second `VKREND: swapchain 1918x1080 ... present mode 2`
-   line followed by counter samples falling to 1:1. This is a one-line fix but
-   needs a test that deliberately resizes the window.
+1. **Fixed in the current working tree: a swapchain rebuild turned frame
+   generation off.** `recreate_swapchain` now uses the same Streamline VSync
+   rule as first creation. The live resize check rebuilt from present mode 1 to
+   present mode 1 and measured 651 presented frames for 330 host presents after
+   resize (1.97x). The fix and check are not committed yet.
 
 2. **Sprites cannot be filtered, and bleeding will not fix it.** Colour-key
    transparency is "RGB is black" (`textured_model.frag:59`), so colour-keyed
@@ -380,7 +393,21 @@ falling to 1:1 (`presented=4117 host-presents=2760` overall, 1.49x, with the
 final intervals flat). Frame generation was working earlier in the same run.
 Treat that log line as the signature of the bug.
 
-## 9. Intentionally uncommitted
+### Verification after takeover
+
+| Check | Result |
+|---|---|
+| Streamline build | exit 0; rebuilt `devpixmp.c`, `vkrend`, and `dethrace.exe` |
+| Tests (tests dir) | exit 0; `1/1 test_dethrace Passed` |
+| Live resize check, 55 s | initial present mode 1, rebuilt present mode 1; 651 presented / 330 host presents after resize = 1.97x; zero matched errors |
+
+Run the resize check with:
+
+```powershell
+.\tools\verify_streamline_resize.ps1 -Repo .
+```
+
+## 9. Local inputs not tracked
 
 These are local inputs, not part of the branch, and must not be added:
 
@@ -391,28 +418,32 @@ These are local inputs, not part of the branch, and must not be added:
 
 ## 10. Current objective and next tasks
 
-**Objective:** frame generation works but is not yet trustworthy or shippable.
-Move it from "demonstrated once" to "holds up across a full race", then close
-the Stage 4/5/6 image-quality gates.
+**Objective:** keep the Streamline frame contract reliable, then improve the
+Vulkan image quality in small, verifiable stages.
 
-1. **Fix the vsync-on-rebuild bug (§7.1).** One line in `recreate_swapchain`,
-   but add a test that resizes the window mid-race. This is top of the list
-   because it silently disables the branch's headline feature.
-2. **Separate "plug-in primed" from "FG running" (§7.3)** so the counter stops
+Visual stages:
+
+1. Verify and tune the current per-pixel lighting against the car and track.
+2. Add a low-cost sky/ground ambient term.
+3. Add half-size SSAO before DLSS.
+4. Add stable screen-space contact/sun shadows with strict depth guards.
+5. Capture clean A/B images and update the visual acceptance notes.
+
+1. **Separate "plug-in primed" from "FG running" (§7.3)** so the counter stops
    producing false alarms and can be trusted in automation.
-3. **Repair the debug build** (`dethrace.rc` step) so crashes give symbols.
-4. **Recreate the swapchain when FG is toggled**, per the DLSS-G guide §18, and
+2. **Repair the debug build** (`dethrace.rc` step) so crashes give symbols.
+3. **Recreate the swapchain when FG is toggled**, per the DLSS-G guide §18, and
    prove the simulation still runs at host-frame speed with FG on.
-5. **Give FG a correct display-size HUD-less/UI contract (§7.6, §7.7)** and pass
+4. **Give FG a correct display-size HUD-less/UI contract (§7.6, §7.7)** and pass
    real camera planes (§7.8).
-6. **Decide the sprite-filtering question (§7.2)** — option (c), premultiplied
+5. **Decide the sprite-filtering question (§7.2)** — option (c), premultiplied
    alpha, is the only real fix and deserves its own session.
-7. **Finish the Stage 4 motion-vector debug view** and validate camera, car and
+6. **Finish the Stage 4 motion-vector debug view** and validate camera, car and
    2D motion fields.
-8. **Capture Stage 5 evidence**: 1080p A/B images, ghosting behind moving cars,
+7. **Capture Stage 5 evidence**: 1080p A/B images, ghosting behind moving cars,
    FPS and latency table.
-9. **Re-project world-anchored 2D markers for widescreen (§7.5).**
-10. **Add INI/CLI settings**, fallback tests, licence text and shipping docs.
+8. **Re-project world-anchored 2D markers for widescreen (§7.5).**
+9. **Add INI/CLI settings**, fallback tests, licence text and shipping docs.
 
 ## 11. Files to read first
 
